@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Deserializer, Serializer};
 use std::io::{BufWriter, LineWriter, StdoutLock, Write};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Body {
@@ -38,6 +38,18 @@ struct Message {
     body: Body,
 }
 
+impl Message {
+    fn send(&self, output: &mut impl Write) -> anyhow::Result<()> {
+        serde_json::to_writer(&mut *output, &self).context("serializing message")?;
+        output
+            .write_all(b"\n")
+            .context("appending trailing newline")?;
+        output.flush().context("flushing message to STDOUT")?;
+
+        Ok(())
+    }
+}
+
 fn main() -> Result<()> {
     let stdin = std::io::stdin().lock();
     let in_stream = Deserializer::from_reader(stdin).into_iter::<Message>();
@@ -50,37 +62,11 @@ fn main() -> Result<()> {
     };
 
     for msg in in_stream {
-        let msg = msg.context("Bad STDIN input")?;
-        node.step(msg, &mut stdout)
-            .context("failed to execute step")?;
+        let msg = msg.context("deserializing message from STDIN")?;
+        node.step(msg, &mut stdout).context("processing message")?;
     }
 
     Ok(())
-}
-
-struct AndNewLineWriter<W>
-where
-    W: std::io::Write,
-{
-    inner: W,
-}
-
-impl<W: std::io::Write> AndNewLineWriter<W> {
-    pub fn new(writer: W) -> Self {
-        AndNewLineWriter { inner: writer }
-    }
-}
-
-impl<W: std::io::Write> Write for AndNewLineWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.inner.write_all(buf)?;
-        self.inner.write_all(b"\n")?;
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush()
-    }
 }
 
 struct EchoNode {
@@ -105,16 +91,9 @@ impl EchoNode {
                 };
                 self.seq += 1;
 
-                serde_json::to_writer(&mut *output, &reply)
-                    .context("failed to write serialized output to STDOUT")?;
-                output
-                    .write_all(b"\n")
-                    .context("failed to append new line character to STDOUT")?;
-                output
-                    .flush()
-                    .context("failed to flush message to STDOUT")?;
+                reply.send(output)?
             }
-            Payload::InitOk => {}
+            Payload::InitOk => bail!("unexpected init_ok message"),
             Payload::Echo { echo } => {
                 let reply = Message {
                     src: self.id.clone(),
@@ -127,14 +106,7 @@ impl EchoNode {
                 };
                 self.seq += 1;
 
-                serde_json::to_writer(&mut *output, &reply)
-                    .context("failed to write serialized output to STDOUT")?;
-                output
-                    .write_all(b"\n")
-                    .context("failed to append new line character to STDOUT")?;
-                output
-                    .flush()
-                    .context("failed to flush message to STDOUT")?;
+                reply.send(output)?
             }
             Payload::EchoOk { .. } => {}
         };
@@ -142,3 +114,5 @@ impl EchoNode {
         Ok(())
     }
 }
+
+trait Node<P> {}
