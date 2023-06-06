@@ -1,28 +1,23 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Deserializer, Serializer};
-use std::io::{BufRead, BufWriter, LineWriter, StdoutLock, Write};
+use std::io::{BufRead, StdoutLock, Write};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct Body<P> {
-    #[serde(rename = "msg_id")]
-    id: Option<usize>,
-    in_reply_to: Option<usize>,
-    #[serde(flatten)]
-    payload: P,
+pub trait Node<P> {
+    fn init(init: Init) -> anyhow::Result<Self>
+    where
+        Self: Sized;
+
+    fn step(&mut self, input: Message<P>, output: &mut StdoutLock) -> Result<()>;
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "type")]
-#[serde(rename_all = "snake_case")]
-enum Payload {
-    Echo {
-        echo: String,
-    },
-    EchoOk {
-        echo: String,
-    },
+pub struct Body<P> {
+    #[serde(rename = "msg_id")]
+    pub id: Option<usize>,
+    pub in_reply_to: Option<usize>,
+    #[serde(flatten)]
+    pub payload: P,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -34,21 +29,21 @@ enum InitPayload {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct Init {
-    node_id: String,
-    node_ids: Vec<String>,
+pub struct Init {
+    pub node_id: String,
+    pub node_ids: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct Message<P> {
-    src: String,
+pub struct Message<P> {
+    pub src: String,
     #[serde(rename = "dest")]
-    dst: String,
-    body: Body<P>,
+    pub dst: String,
+    pub body: Body<P>,
 }
 
 impl<P> Message<P> {
-    fn send(&self, output: &mut impl Write) -> anyhow::Result<()>
+    pub fn send(&self, output: &mut impl Write) -> anyhow::Result<()>
     where
         P: Serialize,
     {
@@ -62,7 +57,11 @@ impl<P> Message<P> {
     }
 }
 
-fn event_loop() -> anyhow::Result<()> {
+pub fn event_loop<'a, N, P>() -> anyhow::Result<()>
+where
+    N: Node<P>,
+    P: Serialize + Deserialize<'a>,
+{
     let mut stdin = std::io::stdin().lock().lines();
 
     let init_msg: Message<InitPayload> = serde_json::from_str(
@@ -77,16 +76,11 @@ fn event_loop() -> anyhow::Result<()> {
 
     let mut stdout = std::io::stdout().lock();
 
-
     let InitPayload::Init(init) = init_msg.body.payload else {
         panic!("first message should be init");
     };
 
-    let mut node = EchoNode {
-        id: init.node_id,
-        seq: 0,
-    };
-
+    let mut node = N::init(init)?;
 
     let reply = Message::<InitPayload> {
         src: init_msg.dst,
@@ -112,41 +106,4 @@ fn event_loop() -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-fn main() -> anyhow::Result<()> {
-    event_loop()
-}
-
-trait Node<P> {
-    fn step(&mut self, input: Message<P>, output: &mut StdoutLock) -> Result<()>;
-}
-
-struct EchoNode {
-    id: String,
-    seq: usize,
-}
-
-impl Node<Payload> for EchoNode {
-    fn step(&mut self, input: Message<Payload>, output: &mut StdoutLock) -> Result<()> {
-        match input.body.payload {
-            Payload::Echo { echo } => {
-                let reply = Message {
-                    src: self.id.clone(),
-                    dst: input.src,
-                    body: Body {
-                        id: Some(self.seq),
-                        in_reply_to: input.body.id,
-                        payload: Payload::EchoOk { echo },
-                    },
-                };
-                self.seq += 1;
-
-                reply.send(output)?
-            }
-            Payload::EchoOk { .. } => {}
-        };
-
-        Ok(())
-    }
 }
