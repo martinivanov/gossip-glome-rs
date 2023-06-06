@@ -1,8 +1,8 @@
 use gossip_glomers_rs::{event_loop, Node, Init, Message, Body};
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, StdoutLock, Write};
+use std::io::{StdoutLock};
 
-use anyhow::{Context, Result};
+use anyhow::{Result};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
