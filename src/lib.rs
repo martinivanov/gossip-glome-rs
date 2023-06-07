@@ -1,14 +1,88 @@
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, StdoutLock, Write};
+use std::{
+    io::{BufRead, StdoutLock, Write},
+    marker::PhantomData,
+};
 
 use anyhow::{Context, Result};
 
-pub trait Node<P> {
-    fn init(init: Init) -> anyhow::Result<Self>
-    where
-        Self: Sized;
+pub struct Node<S, H, P>
+where
+    H: Handler<P, S>,
+    P: Sized,
+{
+    pub id: String,
+    pub seq: usize,
+    pub state: S,
+    pub handler: H,
+    _payload: PhantomData<P>,
+}
 
-    fn step(&mut self, input: Message<P>, output: &mut StdoutLock) -> Result<()>;
+impl<'a, S, H, P> Node<S, H, P>
+where
+    H: Handler<P, S>,
+    P: Serialize + Deserialize<'a>
+{
+    pub fn init(state: S, handler: H) -> anyhow::Result<Node<S, H, P>> {
+        let mut stdin = std::io::stdin().lock().lines();
+
+        let init_msg: Message<InitPayload> = serde_json::from_str(
+            &stdin
+                .next()
+                .expect("failed reading line from STDIN")
+                .context("failed to read init message from STDIN")?,
+        )
+        .context("failed to deserialize init message from STDIN")?;
+
+        let mut stdout = std::io::stdout().lock();
+
+        let InitPayload::Init(init) = init_msg.body.payload else {
+            panic!("first message should be init");
+        };
+
+        let node = Node::<S, H, P> {
+            id: init.node_id,
+            seq: 0,
+            state,
+            handler,
+            _payload: PhantomData,
+        };
+
+        let reply = Message::<InitPayload> {
+            src: init_msg.dst,
+            dst: init_msg.src,
+            body: Body {
+                id: Some(0),
+                in_reply_to: init_msg.body.id,
+                payload: InitPayload::InitOk,
+            },
+        };
+
+        reply
+            .send(&mut stdout)
+            .context("failed sending init_ok to STDOUT")?;
+
+        Ok(node)
+    }
+
+    pub fn run(&mut self) -> anyhow::Result<()> {
+        let stdin = std::io::stdin().lock();
+        let in_stream = serde_json::Deserializer::from_reader(stdin).into_iter();
+
+        let mut stdout = std::io::stdout().lock();
+
+        for msg in in_stream {
+            let msg = msg.context("failed to deserialize message from STDIN")?;
+            self.handler.step(msg, self.state, &mut stdout)
+                .context("failed processing message")?;
+        }
+
+        Ok(())
+    }
+}
+
+pub trait Handler<P, S> {
+    fn step(&mut self, state: S, input: Message<P>, output: &mut StdoutLock) -> Result<()>;
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -55,55 +129,4 @@ impl<P> Message<P> {
 
         Ok(())
     }
-}
-
-pub fn event_loop<'a, N, P>() -> anyhow::Result<()>
-where
-    N: Node<P>,
-    P: Serialize + Deserialize<'a>,
-{
-    let mut stdin = std::io::stdin().lock().lines();
-
-    let init_msg: Message<InitPayload> = serde_json::from_str(
-        &stdin
-            .next()
-            .expect("failed reading line from STDIN")
-            .context("failed to read init message from STDIN")?,
-    )
-    .context("failed to deserialize init message from STDIN")?;
-
-    drop(stdin);
-
-    let mut stdout = std::io::stdout().lock();
-
-    let InitPayload::Init(init) = init_msg.body.payload else {
-        panic!("first message should be init");
-    };
-
-    let mut node = N::init(init)?;
-
-    let reply = Message::<InitPayload> {
-        src: init_msg.dst,
-        dst: init_msg.src,
-        body: Body {
-            id: Some(0),
-            in_reply_to: init_msg.body.id,
-            payload: InitPayload::InitOk,
-        },
-    };
-
-    reply
-        .send(&mut stdout)
-        .context("failed sending init_ok to STDOUT")?;
-
-    let stdin = std::io::stdin().lock();
-    let in_stream = serde_json::Deserializer::from_reader(stdin).into_iter();
-
-    for msg in in_stream {
-        let msg = msg.context("failed to deserialize message from STDIN")?;
-        node.step(msg, &mut stdout)
-            .context("failed processing message")?;
-    }
-
-    Ok(())
 }

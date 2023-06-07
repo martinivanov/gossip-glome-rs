@@ -1,4 +1,4 @@
-use gossip_glomers_rs::{event_loop, Node, Init, Message, Body};
+use gossip_glomers_rs::{event_loop, Node, Init, Message, Body, Handler};
 use serde::{Deserialize, Serialize};
 use std::io::{StdoutLock};
 
@@ -13,25 +13,17 @@ enum Payload {
 }
 
 fn main() -> anyhow::Result<()> {
-    event_loop::<EchoNode, Payload>()
+    let handler = EchoHandler{};
+    let mut node = Node::<(), EchoHandler, Payload>::init((), handler)?;
+    node.run()
+
 }
 
-struct EchoNode {
-    id: String,
-    seq: usize,
+struct EchoHandler {
 }
 
-impl Node<Payload> for EchoNode {
-    fn init(init: Init) -> anyhow::Result<Self> {
-        let node = EchoNode {
-            id: init.node_id,
-            seq: 0,
-        };
-
-        Ok(node)
-    }
-
-    fn step(&mut self, input: Message<Payload>, output: &mut StdoutLock) -> Result<()> {
+impl Handler<Payload> for EchoHandler {
+    fn step(&mut self, state: EchoState, input: Message<Payload>, output: &mut StdoutLock) -> Result<()> {
         match input.body.payload {
             Payload::Echo { echo } => {
                 let reply = Message {
