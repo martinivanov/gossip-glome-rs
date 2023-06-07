@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
     io::{BufRead, StdoutLock, Write},
-    marker::PhantomData,
+    marker::PhantomData, sync::Arc,
 };
 
 use anyhow::{Context, Result};
@@ -16,14 +16,25 @@ where
     P: Serialize,
 {
     pub seq: usize,
+    cluster_state: Arc::<ClusterState>,
     _payload: PhantomData<P>,
 }
 
-impl<P> IO<P>
+impl<'a, P> IO<P>
 where
     P: Serialize,
 {
-    pub fn send(&mut self, message: Message<P>, output: &mut impl Write) -> anyhow::Result<()> {
+    pub fn send(&mut self, to: String, in_reply_to: Option<usize>, payload: P, output: &mut impl Write) -> anyhow::Result<()> {
+        let message = Message::<P> {
+            src: self.cluster_state.node_id.clone(),
+            dst: to,
+            body: Body::<P> {
+                id: Some(self.seq),
+                in_reply_to,
+                payload,
+            }
+        };
+
         serde_json::to_writer(&mut *output, &message).context("serializing message")?;
 
         output
@@ -42,17 +53,9 @@ where
         reply: P,
         output: &mut impl Write,
     ) -> anyhow::Result<()> {
-        let reply = Message::<P> {
-            src: message.dst.clone(),
-            dst: message.src.clone(),
-            body: Body {
-                id: Some(self.seq),
-                in_reply_to: message.body.id,
-                payload: reply,
-            },
-        };
-
-        self.send(reply, output)
+        let dst = message.src.clone();
+        let in_reply_to = message.body.id;
+        self.send(dst, in_reply_to, reply, output)
     }
 }
 
@@ -61,7 +64,7 @@ where
     H: Handler<P, S>,
     P: Sized + Serialize,
 {
-    pub cluster_state: ClusterState,
+    pub cluster_state: Arc::<ClusterState>,
     pub io: IO<P>,
     pub state: S,
     pub handler: H,
@@ -94,13 +97,16 @@ where
             node_ids: init.node_ids.clone(),
         };
 
+        let cluster_state = Arc::new(cluster_state);
+
         let io = IO::<P> {
             seq: 0,
+            cluster_state: cluster_state.clone(),
             _payload: PhantomData,
         };
 
         let node = Node::<S, H, P> {
-            cluster_state,
+            cluster_state: cluster_state.clone(),
             io,
             state,
             handler,
@@ -108,6 +114,7 @@ where
 
         let mut init_io = IO::<InitPayload> {
             seq: 0,
+            cluster_state: cluster_state.clone(),
             _payload: PhantomData,
         };
 
@@ -184,19 +191,4 @@ pub struct Message<P> {
     #[serde(rename = "dest")]
     pub dst: String,
     pub body: Body<P>,
-}
-
-impl<P> Message<P> {
-    pub fn send(&self, output: &mut impl Write) -> anyhow::Result<()>
-    where
-        P: Serialize,
-    {
-        serde_json::to_writer(&mut *output, &self).context("serializing message")?;
-        output
-            .write_all(b"\n")
-            .context("appending trailing newline")?;
-        output.flush().context("flushing message to STDOUT")?;
-
-        Ok(())
-    }
 }
