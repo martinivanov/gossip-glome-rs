@@ -1,4 +1,4 @@
-use gossip_glomers_rs::{Body, ClusterState, Handler, Message, Node, IO};
+use gossip_glomers_rs::{ClusterState, Handler, Message, Node, IO};
 use serde::{Deserialize, Serialize};
 use std::io::StdoutLock;
 
