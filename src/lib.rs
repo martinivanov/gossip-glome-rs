@@ -12,12 +12,17 @@ pub struct ClusterState {
 }
 
 pub struct IO<P>
-where P: Serialize {
+where
+    P: Serialize,
+{
     pub seq: usize,
     _payload: PhantomData<P>,
 }
 
-impl<P> IO<P> where P: Serialize {
+impl<P> IO<P>
+where
+    P: Serialize,
+{
     pub fn send(&mut self, message: Message<P>, output: &mut impl Write) -> anyhow::Result<()> {
         serde_json::to_writer(&mut *output, &message).context("serializing message")?;
 
@@ -31,7 +36,12 @@ impl<P> IO<P> where P: Serialize {
         Ok(())
     }
 
-    pub fn reply_to(&mut self, message: &Message<P>, reply: P, output: &mut impl Write) -> anyhow::Result<()> {
+    pub fn reply_to(
+        &mut self,
+        message: &Message<P>,
+        reply: P,
+        output: &mut impl Write,
+    ) -> anyhow::Result<()> {
         let reply = Message::<P> {
             src: message.dst.clone(),
             dst: message.src.clone(),
@@ -60,7 +70,7 @@ where
 impl<'a, S, H, P> Node<S, H, P>
 where
     H: Handler<P, S>,
-    P: Serialize + Deserialize<'a>
+    P: Serialize + Deserialize<'a>,
 {
     pub fn init(state: S, handler: H) -> anyhow::Result<Node<S, H, P>> {
         let mut stdin = std::io::stdin().lock().lines();
@@ -86,7 +96,7 @@ where
 
         let io = IO::<P> {
             seq: 0,
-            _payload: PhantomData
+            _payload: PhantomData,
         };
 
         let node = Node::<S, H, P> {
@@ -98,7 +108,7 @@ where
 
         let mut init_io = IO::<InitPayload> {
             seq: 0,
-            _payload: PhantomData
+            _payload: PhantomData,
         };
 
         init_io.reply_to(&init_msg, InitPayload::InitOk, &mut stdout)?;
@@ -114,7 +124,14 @@ where
 
         for msg in in_stream {
             let msg = msg.context("failed to deserialize message from STDIN")?;
-            self.handler.step(&self.cluster_state, &mut self.io, &mut self.state, msg, &mut stdout)
+            self.handler
+                .step(
+                    &self.cluster_state,
+                    &mut self.io,
+                    &mut self.state,
+                    msg,
+                    &mut stdout,
+                )
                 .context("failed processing message")?;
         }
 
@@ -122,9 +139,20 @@ where
     }
 }
 
-pub trait Handler<P, S = ()> 
-where P: Serialize {
-    fn step(&mut self, cluster_state: &ClusterState, io: &mut IO<P>, state: &mut S, input: Message<P>, output: &mut StdoutLock) -> Result<()> where Self: Sized;
+pub trait Handler<P, S = ()>
+where
+    P: Serialize,
+{
+    fn step(
+        &mut self,
+        cluster_state: &ClusterState,
+        io: &mut IO<P>,
+        state: &mut S,
+        input: Message<P>,
+        output: &mut StdoutLock,
+    ) -> Result<()>
+    where
+        Self: Sized;
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
