@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::{
     io::{BufRead, StdoutLock, Write},
-    marker::PhantomData, sync::Arc,
+    marker::PhantomData,
+    sync::Arc,
 };
 
 use anyhow::{Context, Result};
@@ -16,7 +17,7 @@ where
     P: Serialize,
 {
     pub seq: usize,
-    cluster_state: Arc::<ClusterState>,
+    cluster_state: Arc<ClusterState>,
     _payload: PhantomData<P>,
 }
 
@@ -24,7 +25,13 @@ impl<'a, P> IO<P>
 where
     P: Serialize,
 {
-    pub fn send(&mut self, to: String, in_reply_to: Option<usize>, payload: P, output: &mut impl Write) -> anyhow::Result<()> {
+    pub fn send(
+        &mut self,
+        to: String,
+        in_reply_to: Option<usize>,
+        payload: P,
+        output: &mut impl Write,
+    ) -> anyhow::Result<()> {
         let message = Message::<P> {
             src: self.cluster_state.node_id.clone(),
             dst: to,
@@ -32,7 +39,7 @@ where
                 id: Some(self.seq),
                 in_reply_to,
                 payload,
-            }
+            },
         };
 
         serde_json::to_writer(&mut *output, &message).context("serializing message")?;
@@ -64,7 +71,7 @@ where
     H: Handler<P, S>,
     P: Sized + Serialize,
 {
-    pub cluster_state: Arc::<ClusterState>,
+    pub cluster_state: Arc<ClusterState>,
     pub io: IO<P>,
     pub state: S,
     pub handler: H,
