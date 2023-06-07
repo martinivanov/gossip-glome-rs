@@ -55,7 +55,6 @@ where
     pub io: IO<P>,
     pub state: S,
     pub handler: H,
-    _payload: PhantomData<P>,
 }
 
 impl<'a, S, H, P> Node<S, H, P>
@@ -95,7 +94,6 @@ where
             io,
             state,
             handler,
-            _payload: PhantomData,
         };
 
         let mut init_io = IO::<InitPayload> {
@@ -116,7 +114,7 @@ where
 
         for msg in in_stream {
             let msg = msg.context("failed to deserialize message from STDIN")?;
-            self.handler.step(&self.cluster_state, &mut self.io, msg, &mut stdout)
+            self.handler.step(&self.cluster_state, &mut self.io, &mut self.state, msg, &mut stdout)
                 .context("failed processing message")?;
         }
 
@@ -126,7 +124,7 @@ where
 
 pub trait Handler<P, S = ()> 
 where P: Serialize {
-    fn step(&mut self, cluster_state: &ClusterState, io: &mut IO<P>, input: Message<P>, output: &mut StdoutLock) -> Result<()> where Self: Sized;
+    fn step(&mut self, cluster_state: &ClusterState, io: &mut IO<P>, state: &mut S, input: Message<P>, output: &mut StdoutLock) -> Result<()> where Self: Sized;
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

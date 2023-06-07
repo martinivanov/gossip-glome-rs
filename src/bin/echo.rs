@@ -20,11 +20,12 @@ fn main() -> anyhow::Result<()> {
 
 struct EchoHandler {}
 
-impl Handler<Payload> for EchoHandler {
+impl Handler<Payload, ()> for EchoHandler {
     fn step(
         &mut self,
         _: &ClusterState,
         io: &mut IO<Payload>,
+        _: &mut (),
         input: Message<Payload>,
         output: &mut StdoutLock,
     ) -> Result<()> {
