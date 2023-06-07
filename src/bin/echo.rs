@@ -1,8 +1,8 @@
-use gossip_glomers_rs::{event_loop, Node, Init, Message, Body, Handler};
+use gossip_glomers_rs::{Body, ClusterState, Handler, Message, Node, IO};
 use serde::{Deserialize, Serialize};
-use std::io::{StdoutLock};
+use std::io::StdoutLock;
 
-use anyhow::{Result};
+use anyhow::Result;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
@@ -13,31 +13,28 @@ enum Payload {
 }
 
 fn main() -> anyhow::Result<()> {
-    let handler = EchoHandler{};
+    let handler = EchoHandler {};
     let mut node = Node::<(), EchoHandler, Payload>::init((), handler)?;
     node.run()
-
 }
 
-struct EchoHandler {
-}
+struct EchoHandler {}
 
 impl Handler<Payload> for EchoHandler {
-    fn step(&mut self, state: EchoState, input: Message<Payload>, output: &mut StdoutLock) -> Result<()> {
-        match input.body.payload {
+    fn step(
+        &mut self,
+        _: &ClusterState,
+        io: &mut IO<Payload>,
+        input: Message<Payload>,
+        output: &mut StdoutLock,
+    ) -> Result<()> {
+        let payload = &input.body.payload;
+        match payload {
             Payload::Echo { echo } => {
-                let reply = Message {
-                    src: self.id.clone(),
-                    dst: input.src,
-                    body: Body {
-                        id: Some(self.seq),
-                        in_reply_to: input.body.id,
-                        payload: Payload::EchoOk { echo },
-                    },
+                let reply = Payload::EchoOk {
+                    echo: echo.to_string(),
                 };
-                self.seq += 1;
-
-                reply.send(output)?
+                io.reply_to(&input, reply, output)?;
             }
             Payload::EchoOk { .. } => {}
         };

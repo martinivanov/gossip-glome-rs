@@ -6,13 +6,53 @@ use std::{
 
 use anyhow::{Context, Result};
 
+pub struct ClusterState {
+    pub node_id: String,
+    pub node_ids: Vec<String>,
+}
+
+pub struct IO<P>
+where P: Serialize {
+    pub seq: usize,
+    _payload: PhantomData<P>,
+}
+
+impl<P> IO<P> where P: Serialize {
+    pub fn send(&mut self, message: Message<P>, output: &mut impl Write) -> anyhow::Result<()> {
+        serde_json::to_writer(&mut *output, &message).context("serializing message")?;
+
+        output
+            .write_all(b"\n")
+            .context("appending trailing newline")?;
+        output.flush().context("flushing message to STDOUT")?;
+
+        self.seq += 1;
+
+        Ok(())
+    }
+
+    pub fn reply_to(&mut self, message: &Message<P>, reply: P, output: &mut impl Write) -> anyhow::Result<()> {
+        let reply = Message::<P> {
+            src: message.dst.clone(),
+            dst: message.src.clone(),
+            body: Body {
+                id: Some(self.seq),
+                in_reply_to: message.body.id,
+                payload: reply,
+            },
+        };
+
+        self.send(reply, output)
+    }
+}
+
 pub struct Node<S, H, P>
 where
     H: Handler<P, S>,
-    P: Sized,
+    P: Sized + Serialize,
 {
-    pub id: String,
-    pub seq: usize,
+    pub cluster_state: ClusterState,
+    pub io: IO<P>,
     pub state: S,
     pub handler: H,
     _payload: PhantomData<P>,
@@ -36,31 +76,34 @@ where
 
         let mut stdout = std::io::stdout().lock();
 
-        let InitPayload::Init(init) = init_msg.body.payload else {
+        let InitPayload::Init(init) = &init_msg.body.payload else {
             panic!("first message should be init");
         };
 
-        let node = Node::<S, H, P> {
-            id: init.node_id,
+        let cluster_state = ClusterState {
+            node_id: init.node_id.clone(),
+            node_ids: init.node_ids.clone(),
+        };
+
+        let io = IO::<P> {
             seq: 0,
+            _payload: PhantomData
+        };
+
+        let node = Node::<S, H, P> {
+            cluster_state,
+            io,
             state,
             handler,
             _payload: PhantomData,
         };
 
-        let reply = Message::<InitPayload> {
-            src: init_msg.dst,
-            dst: init_msg.src,
-            body: Body {
-                id: Some(0),
-                in_reply_to: init_msg.body.id,
-                payload: InitPayload::InitOk,
-            },
+        let mut init_io = IO::<InitPayload> {
+            seq: 0,
+            _payload: PhantomData
         };
 
-        reply
-            .send(&mut stdout)
-            .context("failed sending init_ok to STDOUT")?;
+        init_io.reply_to(&init_msg, InitPayload::InitOk, &mut stdout)?;
 
         Ok(node)
     }
@@ -73,7 +116,7 @@ where
 
         for msg in in_stream {
             let msg = msg.context("failed to deserialize message from STDIN")?;
-            self.handler.step(msg, self.state, &mut stdout)
+            self.handler.step(&self.cluster_state, &mut self.io, msg, &mut stdout)
                 .context("failed processing message")?;
         }
 
@@ -81,8 +124,9 @@ where
     }
 }
 
-pub trait Handler<P, S> {
-    fn step(&mut self, state: S, input: Message<P>, output: &mut StdoutLock) -> Result<()>;
+pub trait Handler<P, S = ()> 
+where P: Serialize {
+    fn step(&mut self, cluster_state: &ClusterState, io: &mut IO<P>, input: Message<P>, output: &mut StdoutLock) -> Result<()> where Self: Sized;
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
