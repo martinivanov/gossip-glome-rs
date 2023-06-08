@@ -1,6 +1,5 @@
 use gossip_glomers_rs::{ClusterState, Handler, Message, Node, IO};
 use serde::{Deserialize, Serialize};
-use std::io::StdoutLock;
 
 use anyhow::{Result, bail};
 
@@ -27,14 +26,13 @@ impl Handler<Payload, ()> for UniqueIdHandler {
         io: &mut IO<Payload>,
         _: &mut (),
         input: Message<Payload>,
-        output: &mut StdoutLock,
     ) -> Result<()> {
         let payload = &input.body.payload;
         match payload {
             Payload::Generate => {
                 let id = format!("{}-{}", cluster_state.node_id, io.seq);
-                let reply = Payload::GenerateOk { id: id };
-                io.reply_to(&input, reply, output)?;
+                let reply = Payload::GenerateOk { id };
+                io.reply_to(&input, reply)?;
             },
             Payload::GenerateOk { .. } => { bail!("received unexpected GenerateOk message"); }
         };

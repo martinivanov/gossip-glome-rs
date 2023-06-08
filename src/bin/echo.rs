@@ -1,6 +1,5 @@
 use gossip_glomers_rs::{ClusterState, Handler, Message, Node, IO};
 use serde::{Deserialize, Serialize};
-use std::io::StdoutLock;
 
 use anyhow::Result;
 
@@ -27,7 +26,6 @@ impl Handler<Payload, ()> for EchoHandler {
         io: &mut IO<Payload>,
         _: &mut (),
         input: Message<Payload>,
-        output: &mut StdoutLock,
     ) -> Result<()> {
         let payload = &input.body.payload;
         match payload {
@@ -35,7 +33,7 @@ impl Handler<Payload, ()> for EchoHandler {
                 let reply = Payload::EchoOk {
                     echo: echo.to_string(),
                 };
-                io.reply_to(&input, reply, output)?;
+                io.reply_to(&input, reply)?;
             }
             Payload::EchoOk { .. } => {}
         };

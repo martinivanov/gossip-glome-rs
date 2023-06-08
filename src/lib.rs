@@ -12,16 +12,17 @@ pub struct ClusterState {
     pub node_ids: Vec<String>,
 }
 
-pub struct IO<P>
+pub struct IO<'a, P>
 where
     P: Serialize,
 {
     pub seq: usize,
     cluster_state: Arc<ClusterState>,
+    stdout: StdoutLock<'a>,
     _payload: PhantomData<P>,
 }
 
-impl<'a, P> IO<P>
+impl<'a, P> IO<'a, P>
 where
     P: Serialize,
 {
@@ -30,7 +31,6 @@ where
         to: String,
         in_reply_to: Option<usize>,
         payload: P,
-        output: &mut impl Write,
     ) -> anyhow::Result<()> {
         let message = Message::<P> {
             src: self.cluster_state.node_id.clone(),
@@ -42,12 +42,12 @@ where
             },
         };
 
-        serde_json::to_writer(&mut *output, &message).context("serializing message")?;
+        serde_json::to_writer(&mut self.stdout, &message).context("serializing message")?;
 
-        output
+        self.stdout
             .write_all(b"\n")
             .context("appending trailing newline")?;
-        output.flush().context("flushing message to STDOUT")?;
+        self.stdout.flush().context("flushing message to STDOUT")?;
 
         self.seq += 1;
 
@@ -58,31 +58,30 @@ where
         &mut self,
         message: &Message<P>,
         reply: P,
-        output: &mut impl Write,
     ) -> anyhow::Result<()> {
         let dst = message.src.clone();
         let in_reply_to = message.body.id;
-        self.send(dst, in_reply_to, reply, output)
+        self.send(dst, in_reply_to, reply)
     }
 }
 
-pub struct Node<S, H, P>
+pub struct Node<'a, S, H, P>
 where
     H: Handler<P, S>,
     P: Sized + Serialize,
 {
     pub cluster_state: Arc<ClusterState>,
-    pub io: IO<P>,
+    pub io: IO<'a, P>,
     pub state: S,
     pub handler: H,
 }
 
-impl<'a, S, H, P> Node<S, H, P>
+impl<'a, S, H, P> Node<'a, S, H, P>
 where
     H: Handler<P, S>,
     P: Serialize + Deserialize<'a>,
 {
-    pub fn init(state: S, handler: H) -> anyhow::Result<Node<S, H, P>> {
+    pub fn init(state: S, handler: H) -> anyhow::Result<Node<'a, S, H, P>> {
         let mut stdin = std::io::stdin().lock().lines();
 
         let init_msg: Message<InitPayload> = serde_json::from_str(
@@ -93,7 +92,7 @@ where
         )
         .context("failed to deserialize init message from STDIN")?;
 
-        let mut stdout = std::io::stdout().lock();
+        let stdout = std::io::stdout().lock();
 
         let InitPayload::Init(init) = &init_msg.body.payload else {
             panic!("first message should be init");
@@ -105,10 +104,24 @@ where
         };
 
         let cluster_state = Arc::new(cluster_state);
+        
+        let mut init_io = IO::<InitPayload> {
+            seq: 0,
+            cluster_state: cluster_state.clone(),
+            stdout,
+            _payload: PhantomData,
+        };
+
+        init_io.reply_to(&init_msg, InitPayload::InitOk)?;
+
+        drop(init_io);
+
+        let stdout = std::io::stdout().lock();
 
         let io = IO::<P> {
             seq: 0,
             cluster_state: cluster_state.clone(),
+            stdout,
             _payload: PhantomData,
         };
 
@@ -119,22 +132,12 @@ where
             handler,
         };
 
-        let mut init_io = IO::<InitPayload> {
-            seq: 0,
-            cluster_state: cluster_state.clone(),
-            _payload: PhantomData,
-        };
-
-        init_io.reply_to(&init_msg, InitPayload::InitOk, &mut stdout)?;
-
         Ok(node)
     }
 
     pub fn run(&mut self) -> anyhow::Result<()> {
         let stdin = std::io::stdin().lock();
         let in_stream = serde_json::Deserializer::from_reader(stdin).into_iter();
-
-        let mut stdout = std::io::stdout().lock();
 
         for msg in in_stream {
             let msg = msg.context("failed to deserialize message from STDIN")?;
@@ -144,7 +147,6 @@ where
                     &mut self.io,
                     &mut self.state,
                     msg,
-                    &mut stdout,
                 )
                 .context("failed processing message")?;
         }
@@ -163,7 +165,6 @@ where
         io: &mut IO<P>,
         state: &mut S,
         input: Message<P>,
-        output: &mut StdoutLock,
     ) -> Result<()>
     where
         Self: Sized;

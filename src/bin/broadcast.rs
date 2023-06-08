@@ -1,6 +1,6 @@
 use gossip_glomers_rs::{ClusterState, Handler, Message, Node, IO};
 use serde::{Deserialize, Serialize};
-use std::{io::StdoutLock, collections::HashSet};
+use std::collections::HashSet;
 
 use anyhow::{Result, bail};
 
@@ -39,25 +39,24 @@ impl<'a> Handler<Payload, BroadcastState<'a>> for BroadcastHandler {
         io: &mut IO<Payload>,
         state: &mut BroadcastState,
         input: Message<Payload>,
-        output: &mut StdoutLock,
     ) -> Result<()> {
         let payload = &input.body.payload;
         match payload {
             Payload::Topology => {
                 let reply = Payload::TopologyOk;
-                io.reply_to(&input, reply, output)?;
+                io.reply_to(&input, reply)?;
             },
             Payload::TopologyOk => bail!("unexpected topology_ok message"),
             Payload::Broadcast { message } => {
                 state.messages.insert(message.to_owned());
                 let reply = Payload::BroadcastOk;
-                io.reply_to(&input, reply, output)?;
+                io.reply_to(&input, reply)?;
             },
             Payload::BroadcastOk => bail!("unexpected broadcast_ok message"),
             Payload::Read => {
                 let values = state.messages.to_owned();
                 let reply = Payload::ReadOk { messages: values.into_iter().collect()};
-                io.reply_to(&input, reply, output)?;
+                io.reply_to(&input, reply)?;
             },
             Payload::ReadOk { .. } => bail!("unexpected read_ok message"),
         };
