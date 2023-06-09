@@ -1,4 +1,4 @@
-use gossip_glomers_rs::{ClusterState, Event, Node, Server, Timers, IO};
+use gossip_glomers_rs::{ClusterState, Event, Message, Node, Server, Timers, IO};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, time::Duration};
 
@@ -14,6 +14,7 @@ enum Payload {
     BroadcastOk,
     Read,
     ReadOk { messages: Vec<usize> },
+    Gossip { message: String }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -26,8 +27,8 @@ fn main() -> anyhow::Result<()> {
     node.run()
 }
 
-struct BroadcastServer{
-    messages: HashSet<usize>
+struct BroadcastServer {
+    messages: HashSet<usize>,
 }
 
 impl Server<Payload, Timer> for BroadcastServer {
@@ -41,41 +42,51 @@ impl Server<Payload, Timer> for BroadcastServer {
         Ok(server)
     }
 
-    fn on_event(
+    fn on_message(
         &mut self,
         _: &ClusterState,
         io: &mut IO<Payload>,
-        input: Event<Payload, Timer>,
+        input: Message<Payload>,
     ) -> Result<()> {
-        match input {
-            Event::Message(msg) => {
-                let payload = &msg.body.payload;
-                match payload {
-                    Payload::Topology => {
-                        let reply = Payload::TopologyOk;
-                        io.reply_to(&msg, reply)?;
-                    }
-                    Payload::TopologyOk => bail!("unexpected topology_ok message"),
-                    Payload::Broadcast { message } => {
-                        self.messages.insert(message.to_owned());
-                        let reply = Payload::BroadcastOk;
-                        io.reply_to(&msg, reply)?;
-                    }
-                    Payload::BroadcastOk => bail!("unexpected broadcast_ok message"),
-                    Payload::Read => {
-                        let values = self.messages.to_owned();
-                        let reply = Payload::ReadOk {
-                            messages: values.into_iter().collect(),
-                        };
-                        io.reply_to(&msg, reply)?;
-                    }
-                    Payload::ReadOk { .. } => bail!("unexpected read_ok message"),
-                };
+        let payload = &input.body.payload;
+        match payload {
+            Payload::Topology => {
+                let reply = Payload::TopologyOk;
+                io.reply_to(&input, reply)?;
             }
-            Event::Timer(t) => match t {
-                Timer::Gossip => todo!()
+            Payload::TopologyOk => bail!("unexpected topology_ok message"),
+            Payload::Broadcast { message } => {
+                self.messages.insert(message.to_owned());
+                let reply = Payload::BroadcastOk;
+                io.reply_to(&input, reply)?;
+            }
+            Payload::BroadcastOk => bail!("unexpected broadcast_ok message"),
+            Payload::Read => {
+                let values = self.messages.to_owned();
+                let reply = Payload::ReadOk {
+                    messages: values.into_iter().collect(),
+                };
+                io.reply_to(&input, reply)?;
+            }
+            Payload::ReadOk { .. } => bail!("unexpected read_ok message"),
+            Payload::Gossip { message } => {
+                println!("{}", message);
+            }
+        };
+
+        Ok(())
+    }
+
+    fn on_timer(&mut self, cluster_state: &ClusterState, io: &mut IO<Payload>, input: Timer) -> Result<()>
+    where
+        Self: Sized,
+    {
+        match input {
+            Timer::Gossip => {
+                for n in &cluster_state.node_ids {
+                    io.send(n.clone(), None, Payload::Gossip { message: format!("{}-gosho", &n) })?;
+                }
             },
-            Event::EOF => todo!(),
         }
 
         Ok(())

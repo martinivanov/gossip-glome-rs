@@ -164,9 +164,19 @@ where
         self.timers.start();
 
         for event in &self.in_rx {
-            self.handler
-                .on_event(&self.cluster_state, &mut self.io, event)
-                .context("failed processing message")?;
+            match event {
+                Event::Message(message) => {
+                    self.handler
+                        .on_message(&self.cluster_state, &mut self.io, message)
+                        .context("failed processing message")?;
+                }
+                Event::Timer(timer) => {
+                    self.handler
+                        .on_timer(&self.cluster_state, &mut self.io, timer)
+                        .context("failed processing message")?;
+                }
+                Event::EOF => todo!(),
+            }
         }
 
         jh.join().expect("STDIN processing failed")?;
@@ -183,11 +193,20 @@ where
     where
         Self: Sized;
 
-    fn on_event(
+    fn on_message(
         &mut self,
         cluster_state: &ClusterState,
         io: &mut IO<P>,
-        input: Event<P, T>,
+        input: Message<P>
+    ) -> Result<()>
+    where
+        Self: Sized;
+
+    fn on_timer(
+        &mut self,
+        cluster_state: &ClusterState,
+        io: &mut IO<P>,
+        input: T,
     ) -> Result<()>
     where
         Self: Sized;

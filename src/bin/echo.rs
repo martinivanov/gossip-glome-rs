@@ -1,4 +1,4 @@
-use gossip_glomers_rs::{ClusterState, Event, Node, Server, IO, Timers};
+use gossip_glomers_rs::{ClusterState, Message, Node, Server, Timers, IO};
 use serde::{Deserialize, Serialize};
 
 use anyhow::Result;
@@ -20,31 +20,33 @@ struct EchoServer {}
 
 impl Server<Payload, ()> for EchoServer {
     fn init(_: &ClusterState, _: &mut Timers<Payload, ()>) -> Result<EchoServer> {
-        Ok(EchoServer{})
+        Ok(EchoServer {})
     }
 
-    fn on_event(
+    fn on_message(
         &mut self,
         _: &ClusterState,
         io: &mut IO<Payload>,
-        input: Event<Payload, ()>,
+        input: Message<Payload>,
     ) -> Result<()> {
-        match input {
-            Event::Message(msg) => {
-                let payload = &msg.body.payload;
-                match payload {
-                    Payload::Echo { echo } => {
-                        let reply = Payload::EchoOk {
-                            echo: echo.to_string(),
-                        };
-                        io.reply_to(&msg, reply)?;
-                    }
-                    Payload::EchoOk { .. } => {}
+        let payload = &input.body.payload;
+        match payload {
+            Payload::Echo { echo } => {
+                let reply = Payload::EchoOk {
+                    echo: echo.to_string(),
                 };
+                io.reply_to(&input, reply)?;
             }
-            _ => {}
-        }
+            Payload::EchoOk { .. } => {}
+        };
 
+        Ok(())
+    }
+
+    fn on_timer(&mut self, _: &ClusterState, _: &mut IO<Payload>, _: ()) -> Result<()>
+    where
+        Self: Sized,
+    {
         Ok(())
     }
 }

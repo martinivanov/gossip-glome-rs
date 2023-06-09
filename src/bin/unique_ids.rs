@@ -1,4 +1,4 @@
-use gossip_glomers_rs::{ClusterState, Event, Server, Node, IO, Timers};
+use gossip_glomers_rs::{ClusterState, Message, Node, Server, Timers, IO};
 use serde::{Deserialize, Serialize};
 
 use anyhow::{bail, Result};
@@ -20,32 +20,34 @@ struct UniqueIdServer {}
 
 impl Server<Payload, ()> for UniqueIdServer {
     fn init(_: &ClusterState, _: &mut Timers<Payload, ()>) -> Result<UniqueIdServer> {
-        Ok(UniqueIdServer{})
+        Ok(UniqueIdServer {})
     }
 
-    fn on_event(
+    fn on_message(
         &mut self,
         cluster_state: &ClusterState,
         io: &mut IO<Payload>,
-        input: Event<Payload, ()>,
+        input: Message<Payload>,
     ) -> Result<()> {
-        match input {
-            Event::Message(msg) => {
-                let payload = &msg.body.payload;
-                match payload {
-                    Payload::Generate => {
-                        let id = format!("{}-{}", cluster_state.node_id, io.seq);
-                        let reply = Payload::GenerateOk { id };
-                        io.reply_to(&msg, reply)?;
-                    }
-                    Payload::GenerateOk { .. } => {
-                        bail!("received unexpected GenerateOk message");
-                    }
-                };
-            },
-            _ =>  { },
-        }
+        let payload = &input.body.payload;
+        match payload {
+            Payload::Generate => {
+                let id = format!("{}-{}", cluster_state.node_id, io.seq);
+                let reply = Payload::GenerateOk { id };
+                io.reply_to(&input, reply)?;
+            }
+            Payload::GenerateOk { .. } => {
+                bail!("received unexpected GenerateOk message");
+            }
+        };
 
         Ok(())
+    }
+
+    fn on_timer(&mut self, _: &ClusterState, _: &mut IO<Payload>, _: ()) -> Result<()>
+    where
+        Self: Sized,
+    {
+        todo!()
     }
 }
