@@ -19,7 +19,7 @@ fn main() -> anyhow::Result<()> {
 struct EchoServer {}
 
 impl Server<Payload, ()> for EchoServer {
-    fn init(_: &ClusterState, _: &mut Timers<()>) -> Result<EchoServer> {
+    fn init(_: &ClusterState, _: &mut Timers<Payload, ()>) -> Result<EchoServer> {
         Ok(EchoServer{})
     }
 

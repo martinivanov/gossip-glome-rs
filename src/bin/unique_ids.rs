@@ -19,7 +19,7 @@ fn main() -> anyhow::Result<()> {
 struct UniqueIdServer {}
 
 impl Server<Payload, ()> for UniqueIdServer {
-    fn init(_: &ClusterState, _: &mut Timers<()>) -> Result<UniqueIdServer> {
+    fn init(_: &ClusterState, _: &mut Timers<Payload, ()>) -> Result<UniqueIdServer> {
         Ok(UniqueIdServer{})
     }
 

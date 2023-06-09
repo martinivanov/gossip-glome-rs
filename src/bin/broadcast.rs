@@ -37,7 +37,7 @@ struct BroadcastState<'a> {
 }
 
 impl<'a> Server<Payload, Timer, BroadcastState<'a>> for BroadcastServer {
-    fn init(_: &ClusterState, timers: &mut Timers<Timer>) -> Result<BroadcastServer> {
+    fn init(_: &ClusterState, timers: &mut Timers<Payload, Timer>) -> Result<BroadcastServer> {
         let server = BroadcastServer{
         };
 
