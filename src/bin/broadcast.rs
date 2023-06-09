@@ -1,6 +1,6 @@
-use gossip_glomers_rs::{ClusterState, Event, Node, Server, IO};
+use gossip_glomers_rs::{ClusterState, Event, Node, Server, IO, Timers};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
 use anyhow::{bail, Result};
 
@@ -16,17 +16,17 @@ enum Payload {
     ReadOk { messages: Vec<usize> },
 }
 
+#[derive(Clone, Copy, Debug)]
 enum Timer {
     Gossip,
 }
 
 fn main() -> anyhow::Result<()> {
-    let server = BroadcastServer {};
     let state = BroadcastState {
         messages: &mut HashSet::new(),
     };
 
-    let mut node = Node::<BroadcastState, BroadcastServer, Payload, Timer>::init(state, server)?;
+    let mut node = Node::<BroadcastState, BroadcastServer, Payload, Timer>::init(state)?;
     node.run()
 }
 
@@ -37,9 +37,18 @@ struct BroadcastState<'a> {
 }
 
 impl<'a> Server<Payload, Timer, BroadcastState<'a>> for BroadcastServer {
+    fn init(_: &ClusterState, timers: &mut Timers<Timer>) -> Result<BroadcastServer> {
+        let server = BroadcastServer{
+        };
+
+        timers.register_timer(Timer::Gossip, Duration::from_millis(500));
+
+        Ok(server)
+    }
+
     fn on_event(
         &mut self,
-        cluster_state: &ClusterState,
+        _: &ClusterState,
         io: &mut IO<Payload>,
         state: &mut BroadcastState,
         input: Event<Payload, Timer>,
@@ -70,7 +79,9 @@ impl<'a> Server<Payload, Timer, BroadcastState<'a>> for BroadcastServer {
                 };
             }
             Event::Timer(t) => match t {
-                Timer::Gossip => todo!(),
+                Timer::Gossip => {
+                    println!("sadasddd: {:?}", t);
+                },
             },
             Event::EOF => todo!(),
         }

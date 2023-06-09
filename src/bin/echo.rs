@@ -1,4 +1,4 @@
-use gossip_glomers_rs::{ClusterState, Event, Server, Node, IO};
+use gossip_glomers_rs::{ClusterState, Event, Node, Server, IO, Timers};
 use serde::{Deserialize, Serialize};
 
 use anyhow::Result;
@@ -12,14 +12,17 @@ enum Payload {
 }
 
 fn main() -> anyhow::Result<()> {
-    let server = EchoServer{};
-    let mut node = Node::<(), EchoServer, Payload, ()>::init((), server)?;
+    let mut node = Node::<(), EchoServer, Payload, ()>::init(())?;
     node.run()
 }
 
 struct EchoServer {}
 
 impl Server<Payload, ()> for EchoServer {
+    fn init(_: &ClusterState, _: &mut Timers<()>) -> Result<EchoServer> {
+        Ok(EchoServer{})
+    }
+
     fn on_event(
         &mut self,
         _: &ClusterState,
@@ -39,8 +42,8 @@ impl Server<Payload, ()> for EchoServer {
                     }
                     Payload::EchoOk { .. } => {}
                 };
-            },
-            _ => { },
+            }
+            _ => {}
         }
 
         Ok(())
