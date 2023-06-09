@@ -12,7 +12,7 @@ enum Payload {
 }
 
 fn main() -> anyhow::Result<()> {
-    let mut node = Node::<(), UniqueIdServer, Payload, ()>::init(())?;
+    let mut node = Node::<UniqueIdServer, Payload, ()>::init()?;
     node.run()
 }
 
@@ -27,7 +27,6 @@ impl Server<Payload, ()> for UniqueIdServer {
         &mut self,
         cluster_state: &ClusterState,
         io: &mut IO<Payload>,
-        _: &mut (),
         input: Event<Payload, ()>,
     ) -> Result<()> {
         match input {

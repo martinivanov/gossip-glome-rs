@@ -1,4 +1,4 @@
-use gossip_glomers_rs::{ClusterState, Event, Node, Server, IO, Timers};
+use gossip_glomers_rs::{ClusterState, Event, Node, Server, Timers, IO};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, time::Duration};
 
@@ -22,26 +22,21 @@ enum Timer {
 }
 
 fn main() -> anyhow::Result<()> {
-    let state = BroadcastState {
-        messages: &mut HashSet::new(),
-    };
-
-    let mut node = Node::<BroadcastState, BroadcastServer, Payload, Timer>::init(state)?;
+    let mut node = Node::<BroadcastServer, Payload, Timer>::init()?;
     node.run()
 }
 
-struct BroadcastServer {}
-
-struct BroadcastState<'a> {
-    messages: &'a mut HashSet<usize>,
+struct BroadcastServer{
+    messages: HashSet<usize>
 }
 
-impl<'a> Server<Payload, Timer, BroadcastState<'a>> for BroadcastServer {
+impl Server<Payload, Timer> for BroadcastServer {
     fn init(_: &ClusterState, timers: &mut Timers<Payload, Timer>) -> Result<BroadcastServer> {
-        let server = BroadcastServer{
-        };
-
         timers.register_timer(Timer::Gossip, Duration::from_millis(500));
+
+        let server = BroadcastServer {
+            messages: HashSet::<usize>::new(),
+        };
 
         Ok(server)
     }
@@ -50,7 +45,6 @@ impl<'a> Server<Payload, Timer, BroadcastState<'a>> for BroadcastServer {
         &mut self,
         _: &ClusterState,
         io: &mut IO<Payload>,
-        state: &mut BroadcastState,
         input: Event<Payload, Timer>,
     ) -> Result<()> {
         match input {
@@ -63,13 +57,13 @@ impl<'a> Server<Payload, Timer, BroadcastState<'a>> for BroadcastServer {
                     }
                     Payload::TopologyOk => bail!("unexpected topology_ok message"),
                     Payload::Broadcast { message } => {
-                        state.messages.insert(message.to_owned());
+                        self.messages.insert(message.to_owned());
                         let reply = Payload::BroadcastOk;
                         io.reply_to(&msg, reply)?;
                     }
                     Payload::BroadcastOk => bail!("unexpected broadcast_ok message"),
                     Payload::Read => {
-                        let values = state.messages.to_owned();
+                        let values = self.messages.to_owned();
                         let reply = Payload::ReadOk {
                             messages: values.into_iter().collect(),
                         };
@@ -79,9 +73,7 @@ impl<'a> Server<Payload, Timer, BroadcastState<'a>> for BroadcastServer {
                 };
             }
             Event::Timer(t) => match t {
-                Timer::Gossip => {
-                    println!("sadasddd: {:?}", t);
-                },
+                Timer::Gossip => todo!()
             },
             Event::EOF => todo!(),
         }

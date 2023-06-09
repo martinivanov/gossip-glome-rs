@@ -2,8 +2,12 @@ use serde::{Deserialize, Serialize};
 use std::{
     io::{BufRead, StdoutLock, Write},
     marker::PhantomData,
-    sync::{mpsc, Arc},
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Arc,
+    },
     thread,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -62,25 +66,26 @@ where
     }
 }
 
-pub struct Node<'a, S, H, P, T>
+pub struct Node<'a, H, P, T>
 where
-    H: Server<P, T, S>,
+    H: Server<P, T>,
     P: Sized + Serialize,
 {
     pub cluster_state: Arc<ClusterState>,
     pub io: IO<'a, P>,
-    pub state: S,
     pub handler: H,
-    _timer: PhantomData<T>,
+    in_tx: Sender<Event<P, T>>,
+    in_rx: Receiver<Event<P, T>>,
+    timers: Timers<P, T>,
 }
 
-impl<'a, S, H, P, T> Node<'a, S, H, P, T>
+impl<'a, H, P, T> Node<'a, H, P, T>
 where
-    H: Server<P, T, S>,
-    P: Serialize + Deserialize<'a> + Send + 'static,
-    T: Send + 'static,
+    H: Server<P, T>,
+    P: Send + Serialize + Deserialize<'a> + Send + 'static,
+    T: Send + Clone + Copy + 'static,
 {
-    pub fn init(state: S, handler: H) -> anyhow::Result<Node<'a, S, H, P, T>> {
+    pub fn init() -> anyhow::Result<Node<'a, H, P, T>> {
         let mut stdin = std::io::stdin().lock().lines();
 
         let init_msg: Message<InitPayload> = serde_json::from_str(
@@ -109,12 +114,18 @@ where
             _payload: PhantomData,
         };
 
-        let node = Node::<S, H, P, T> {
+        let (in_tx, in_rx) = mpsc::channel();
+        let mut timers: Timers<P, T> = Timers::new(in_tx.clone());
+
+        let server = Server::init(&cluster_state, &mut timers)?;
+
+        let node = Node::<H, P, T> {
             cluster_state: cluster_state.clone(),
             io,
-            state,
-            handler,
-            _timer: PhantomData,
+            handler: server,
+            timers,
+            in_tx,
+            in_rx,
         };
 
         let mut init_io = IO::<InitPayload> {
@@ -130,8 +141,7 @@ where
     }
 
     pub fn run(&mut self) -> anyhow::Result<()> {
-        let (in_tx, in_rx) = mpsc::channel();
-
+        let in_tx = self.in_tx.clone();
         let jh = thread::spawn(move || {
             let stdin = std::io::stdin().lock();
             let in_stream = serde_json::Deserializer::from_reader(stdin).into_iter();
@@ -151,28 +161,32 @@ where
             Ok(())
         });
 
-        for event in in_rx {
+        self.timers.start();
+
+        for event in &self.in_rx {
             self.handler
-                .on_event(&self.cluster_state, &mut self.io, &mut self.state, event)
+                .on_event(&self.cluster_state, &mut self.io, event)
                 .context("failed processing message")?;
         }
 
-        jh.join()
-            .expect("STDIN processing failed")?;
+        jh.join().expect("STDIN processing failed")?;
 
         Ok(())
     }
 }
 
-pub trait Server<P, T, S = ()>
+pub trait Server<P, T>
 where
     P: Serialize,
 {
+    fn init(cluster_state: &ClusterState, timers: &mut Timers<P, T>) -> Result<Self>
+    where
+        Self: Sized;
+
     fn on_event(
         &mut self,
         cluster_state: &ClusterState,
         io: &mut IO<P>,
-        state: &mut S,
         input: Event<P, T>,
     ) -> Result<()>
     where
@@ -214,4 +228,39 @@ pub enum Event<P, T> {
     Timer(T),
     Message(Message<P>),
     EOF,
+}
+
+pub struct Timers<P, T> {
+    regs: Vec<(T, Duration)>,
+    trigger: Sender<Event<P, T>>,
+}
+
+impl<P, T> Timers<P, T>
+where
+    P: Send + 'static,
+    T: Clone + Copy + Send + 'static,
+{
+    fn new(trigger: Sender<Event<P, T>>) -> Self {
+        Timers {
+            regs: Vec::new(),
+            trigger,
+        }
+    }
+
+    fn start(&mut self) {
+        for (timer, interval) in &self.regs {
+            let timer = *timer;
+            let interval = interval.clone();
+            let tx = self.trigger.clone();
+            thread::spawn(move || loop {
+                thread::sleep(interval);
+                let event: Event<P, T> = Event::<P, T>::Timer(timer);
+                _ = tx.send(event);
+            });
+        }
+    }
+
+    pub fn register_timer(&mut self, timer: T, interval: Duration) {
+        self.regs.push((timer, interval));
+    }
 }
