@@ -1,4 +1,4 @@
-use gossip_glomers_rs::{ClusterState, Event, Handler, Node, IO};
+use gossip_glomers_rs::{ClusterState, Event, Node, Server, IO};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -21,23 +21,23 @@ enum Timer {
 }
 
 fn main() -> anyhow::Result<()> {
-    let handler = BroadcastHandler {};
+    let server = BroadcastServer {};
     let state = BroadcastState {
         messages: &mut HashSet::new(),
     };
 
-    let mut node = Node::<BroadcastState, BroadcastHandler, Payload, Timer>::init(state, handler)?;
+    let mut node = Node::<BroadcastState, BroadcastServer, Payload, Timer>::init(state, server)?;
     node.run()
 }
 
-struct BroadcastHandler {}
+struct BroadcastServer {}
 
 struct BroadcastState<'a> {
     messages: &'a mut HashSet<usize>,
 }
 
-impl<'a> Handler<Payload, Timer, BroadcastState<'a>> for BroadcastHandler {
-    fn step(
+impl<'a> Server<Payload, Timer, BroadcastState<'a>> for BroadcastServer {
+    fn on_event(
         &mut self,
         cluster_state: &ClusterState,
         io: &mut IO<Payload>,
@@ -69,10 +69,8 @@ impl<'a> Handler<Payload, Timer, BroadcastState<'a>> for BroadcastHandler {
                     Payload::ReadOk { .. } => bail!("unexpected read_ok message"),
                 };
             }
-            Event::Timer(t) => {
-                match t {
-                    Timer::Gossip => todo!(),
-                }
+            Event::Timer(t) => match t {
+                Timer::Gossip => todo!(),
             },
             Event::EOF => todo!(),
         }

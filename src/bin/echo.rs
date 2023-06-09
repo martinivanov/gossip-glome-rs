@@ -1,4 +1,4 @@
-use gossip_glomers_rs::{ClusterState, Event, Handler, Node, IO};
+use gossip_glomers_rs::{ClusterState, Event, Server, Node, IO};
 use serde::{Deserialize, Serialize};
 
 use anyhow::Result;
@@ -12,15 +12,15 @@ enum Payload {
 }
 
 fn main() -> anyhow::Result<()> {
-    let handler = EchoHandler {};
-    let mut node = Node::<(), EchoHandler, Payload, ()>::init((), handler)?;
+    let server = EchoServer{};
+    let mut node = Node::<(), EchoServer, Payload, ()>::init((), server)?;
     node.run()
 }
 
-struct EchoHandler {}
+struct EchoServer {}
 
-impl Handler<Payload, ()> for EchoHandler {
-    fn step(
+impl Server<Payload, ()> for EchoServer {
+    fn on_event(
         &mut self,
         _: &ClusterState,
         io: &mut IO<Payload>,

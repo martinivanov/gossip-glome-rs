@@ -1,4 +1,4 @@
-use gossip_glomers_rs::{ClusterState, Event, Handler, Node, IO};
+use gossip_glomers_rs::{ClusterState, Event, Server, Node, IO};
 use serde::{Deserialize, Serialize};
 
 use anyhow::{bail, Result};
@@ -12,15 +12,15 @@ enum Payload {
 }
 
 fn main() -> anyhow::Result<()> {
-    let handler = UniqueIdHandler {};
-    let mut node = Node::<(), UniqueIdHandler, Payload, ()>::init((), handler)?;
+    let server = UniqueIdServer{};
+    let mut node = Node::<(), UniqueIdServer, Payload, ()>::init((), server)?;
     node.run()
 }
 
-struct UniqueIdHandler {}
+struct UniqueIdServer {}
 
-impl Handler<Payload, ()> for UniqueIdHandler {
-    fn step(
+impl Server<Payload, ()> for UniqueIdServer {
+    fn on_event(
         &mut self,
         cluster_state: &ClusterState,
         io: &mut IO<Payload>,

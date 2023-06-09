@@ -64,7 +64,7 @@ where
 
 pub struct Node<'a, S, H, P, T>
 where
-    H: Handler<P, T, S>,
+    H: Server<P, T, S>,
     P: Sized + Serialize,
 {
     pub cluster_state: Arc<ClusterState>,
@@ -76,7 +76,7 @@ where
 
 impl<'a, S, H, P, T> Node<'a, S, H, P, T>
 where
-    H: Handler<P, T, S>,
+    H: Server<P, T, S>,
     P: Serialize + Deserialize<'a> + Send + 'static,
     T: Send + 'static,
 {
@@ -153,7 +153,7 @@ where
 
         for event in in_rx {
             self.handler
-                .step(&self.cluster_state, &mut self.io, &mut self.state, event)
+                .on_event(&self.cluster_state, &mut self.io, &mut self.state, event)
                 .context("failed processing message")?;
         }
 
@@ -164,11 +164,11 @@ where
     }
 }
 
-pub trait Handler<P, T, S = ()>
+pub trait Server<P, T, S = ()>
 where
     P: Serialize,
 {
-    fn step(
+    fn on_event(
         &mut self,
         cluster_state: &ClusterState,
         io: &mut IO<P>,
