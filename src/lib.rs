@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::{
     io::{BufRead, StdoutLock, Write},
     marker::PhantomData,
-    sync::Arc,
+    sync::{mpsc, Arc},
+    thread,
 };
 
 use anyhow::{Context, Result};
@@ -54,34 +55,32 @@ where
         Ok(())
     }
 
-    pub fn reply_to(
-        &mut self,
-        message: &Message<P>,
-        reply: P,
-    ) -> anyhow::Result<()> {
+    pub fn reply_to(&mut self, message: &Message<P>, reply: P) -> anyhow::Result<()> {
         let dst = message.src.clone();
         let in_reply_to = message.body.id;
         self.send(dst, in_reply_to, reply)
     }
 }
 
-pub struct Node<'a, S, H, P>
+pub struct Node<'a, S, H, P, T>
 where
-    H: Handler<P, S>,
+    H: Handler<P, T, S>,
     P: Sized + Serialize,
 {
     pub cluster_state: Arc<ClusterState>,
     pub io: IO<'a, P>,
     pub state: S,
     pub handler: H,
+    _timer: PhantomData<T>,
 }
 
-impl<'a, S, H, P> Node<'a, S, H, P>
+impl<'a, S, H, P, T> Node<'a, S, H, P, T>
 where
-    H: Handler<P, S>,
-    P: Serialize + Deserialize<'a>,
+    H: Handler<P, T, S>,
+    P: Serialize + Deserialize<'a> + Send + 'static,
+    T: Send + 'static,
 {
-    pub fn init(state: S, handler: H) -> anyhow::Result<Node<'a, S, H, P>> {
+    pub fn init(state: S, handler: H) -> anyhow::Result<Node<'a, S, H, P, T>> {
         let mut stdin = std::io::stdin().lock().lines();
 
         let init_msg: Message<InitPayload> = serde_json::from_str(
@@ -91,8 +90,6 @@ where
                 .context("failed to read init message from STDIN")?,
         )
         .context("failed to deserialize init message from STDIN")?;
-
-        let stdout = std::io::stdout().lock();
 
         let InitPayload::Init(init) = &init_msg.body.payload else {
             panic!("first message should be init");
@@ -104,58 +101,70 @@ where
         };
 
         let cluster_state = Arc::new(cluster_state);
-        
+
+        let io = IO::<P> {
+            seq: 0,
+            cluster_state: cluster_state.clone(),
+            stdout: std::io::stdout().lock(),
+            _payload: PhantomData,
+        };
+
+        let node = Node::<S, H, P, T> {
+            cluster_state: cluster_state.clone(),
+            io,
+            state,
+            handler,
+            _timer: PhantomData,
+        };
+
         let mut init_io = IO::<InitPayload> {
             seq: 0,
             cluster_state: cluster_state.clone(),
-            stdout,
+            stdout: std::io::stdout().lock(),
             _payload: PhantomData,
         };
 
         init_io.reply_to(&init_msg, InitPayload::InitOk)?;
 
-        drop(init_io);
-
-        let stdout = std::io::stdout().lock();
-
-        let io = IO::<P> {
-            seq: 0,
-            cluster_state: cluster_state.clone(),
-            stdout,
-            _payload: PhantomData,
-        };
-
-        let node = Node::<S, H, P> {
-            cluster_state: cluster_state.clone(),
-            io,
-            state,
-            handler,
-        };
-
         Ok(node)
     }
 
     pub fn run(&mut self) -> anyhow::Result<()> {
-        let stdin = std::io::stdin().lock();
-        let in_stream = serde_json::Deserializer::from_reader(stdin).into_iter();
+        let (in_tx, in_rx) = mpsc::channel();
 
-        for msg in in_stream {
-            let msg = msg.context("failed to deserialize message from STDIN")?;
+        let jh = thread::spawn(move || {
+            let stdin = std::io::stdin().lock();
+            let in_stream = serde_json::Deserializer::from_reader(stdin).into_iter();
+            for msg in in_stream {
+                let msg: Message<P> = msg.context("failed to deserialize message from STDIN")?;
+                let event: Event<P, T> = Event::Message(msg);
+
+                if let Err(_) = in_tx.send(event) {
+                    return Ok::<_, anyhow::Error>(());
+                }
+            }
+
+            if let Err(_) = in_tx.send(Event::EOF) {
+                return Ok::<_, anyhow::Error>(());
+            }
+
+            Ok(())
+        });
+
+        for event in in_rx {
             self.handler
-                .step(
-                    &self.cluster_state,
-                    &mut self.io,
-                    &mut self.state,
-                    msg,
-                )
+                .step(&self.cluster_state, &mut self.io, &mut self.state, event)
                 .context("failed processing message")?;
         }
+
+        jh.join()
+            .expect("STDIN processing failed")?;
 
         Ok(())
     }
 }
 
-pub trait Handler<P, S = ()>
+pub trait Handler<P, T, S = ()>
 where
     P: Serialize,
 {
@@ -164,7 +173,7 @@ where
         cluster_state: &ClusterState,
         io: &mut IO<P>,
         state: &mut S,
-        input: Message<P>,
+        input: Event<P, T>,
     ) -> Result<()>
     where
         Self: Sized;
@@ -199,4 +208,10 @@ pub struct Message<P> {
     #[serde(rename = "dest")]
     pub dst: String,
     pub body: Body<P>,
+}
+
+pub enum Event<P, T> {
+    Timer(T),
+    Message(Message<P>),
+    EOF,
 }

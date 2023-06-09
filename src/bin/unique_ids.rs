@@ -1,7 +1,7 @@
-use gossip_glomers_rs::{ClusterState, Handler, Message, Node, IO};
+use gossip_glomers_rs::{ClusterState, Event, Handler, Node, IO};
 use serde::{Deserialize, Serialize};
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
@@ -13,7 +13,7 @@ enum Payload {
 
 fn main() -> anyhow::Result<()> {
     let handler = UniqueIdHandler {};
-    let mut node = Node::<(), UniqueIdHandler, Payload>::init((), handler)?;
+    let mut node = Node::<(), UniqueIdHandler, Payload, ()>::init((), handler)?;
     node.run()
 }
 
@@ -25,17 +25,24 @@ impl Handler<Payload, ()> for UniqueIdHandler {
         cluster_state: &ClusterState,
         io: &mut IO<Payload>,
         _: &mut (),
-        input: Message<Payload>,
+        input: Event<Payload, ()>,
     ) -> Result<()> {
-        let payload = &input.body.payload;
-        match payload {
-            Payload::Generate => {
-                let id = format!("{}-{}", cluster_state.node_id, io.seq);
-                let reply = Payload::GenerateOk { id };
-                io.reply_to(&input, reply)?;
+        match input {
+            Event::Message(msg) => {
+                let payload = &msg.body.payload;
+                match payload {
+                    Payload::Generate => {
+                        let id = format!("{}-{}", cluster_state.node_id, io.seq);
+                        let reply = Payload::GenerateOk { id };
+                        io.reply_to(&msg, reply)?;
+                    }
+                    Payload::GenerateOk { .. } => {
+                        bail!("received unexpected GenerateOk message");
+                    }
+                };
             },
-            Payload::GenerateOk { .. } => { bail!("received unexpected GenerateOk message"); }
-        };
+            _ =>  { },
+        }
 
         Ok(())
     }

@@ -1,4 +1,4 @@
-use gossip_glomers_rs::{ClusterState, Handler, Message, Node, IO};
+use gossip_glomers_rs::{ClusterState, Event, Handler, Node, IO};
 use serde::{Deserialize, Serialize};
 
 use anyhow::Result;
@@ -13,7 +13,7 @@ enum Payload {
 
 fn main() -> anyhow::Result<()> {
     let handler = EchoHandler {};
-    let mut node = Node::<(), EchoHandler, Payload>::init((), handler)?;
+    let mut node = Node::<(), EchoHandler, Payload, ()>::init((), handler)?;
     node.run()
 }
 
@@ -25,18 +25,23 @@ impl Handler<Payload, ()> for EchoHandler {
         _: &ClusterState,
         io: &mut IO<Payload>,
         _: &mut (),
-        input: Message<Payload>,
+        input: Event<Payload, ()>,
     ) -> Result<()> {
-        let payload = &input.body.payload;
-        match payload {
-            Payload::Echo { echo } => {
-                let reply = Payload::EchoOk {
-                    echo: echo.to_string(),
+        match input {
+            Event::Message(msg) => {
+                let payload = &msg.body.payload;
+                match payload {
+                    Payload::Echo { echo } => {
+                        let reply = Payload::EchoOk {
+                            echo: echo.to_string(),
+                        };
+                        io.reply_to(&msg, reply)?;
+                    }
+                    Payload::EchoOk { .. } => {}
                 };
-                io.reply_to(&input, reply)?;
-            }
-            Payload::EchoOk { .. } => {}
-        };
+            },
+            _ => { },
+        }
 
         Ok(())
     }
