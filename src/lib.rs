@@ -36,7 +36,7 @@ where
         to: String,
         in_reply_to: Option<usize>,
         payload: P,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<usize> {
         let message = Message::<P> {
             src: self.cluster_state.node_id.clone(),
             dst: to,
@@ -54,12 +54,19 @@ where
             .context("appending trailing newline")?;
         self.stdout.flush().context("flushing message to STDOUT")?;
 
+
+        let seq = self.seq;
+
         self.seq += 1;
 
-        Ok(())
+        Ok(seq)
     }
 
-    pub fn reply_to(&mut self, message: &Message<P>, reply: P) -> anyhow::Result<()> {
+    pub fn request(&mut self, dst: String, request: P) -> anyhow::Result<usize> {
+        self.send(dst, None, request)
+    }
+
+    pub fn reply_to(&mut self, message: &Message<P>, reply: P) -> anyhow::Result<usize> {
         let dst = message.src.clone();
         let in_reply_to = message.body.id;
         self.send(dst, in_reply_to, reply)

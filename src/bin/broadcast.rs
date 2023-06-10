@@ -7,8 +7,6 @@ use std::{
 
 use anyhow::{bail, Result};
 
-use rand::seq::SliceRandom;
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
@@ -33,6 +31,7 @@ enum Payload {
 #[derive(Clone, Copy, Debug)]
 enum Timer {
     Gossip,
+    RetryBroadcast,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -44,6 +43,7 @@ struct BroadcastServer {
     messages: HashSet<usize>,
     seen: HashMap<String, HashSet<usize>>,
     neighbours: Vec<String>,
+    pending_broadcasts: HashMap<usize, (String, Payload)>,
 }
 
 impl Server<Payload, Timer> for BroadcastServer {
@@ -51,7 +51,8 @@ impl Server<Payload, Timer> for BroadcastServer {
         cluster_state: &ClusterState,
         timers: &mut Timers<Payload, Timer>,
     ) -> Result<BroadcastServer> {
-        timers.register_timer(Timer::Gossip, Duration::from_millis(300));
+        //timers.register_timer(Timer::Gossip, Duration::from_millis(300));
+        timers.register_timer(Timer::RetryBroadcast, Duration::from_millis(1000));
 
         let seen = cluster_state
             .node_ids
@@ -59,13 +60,13 @@ impl Server<Payload, Timer> for BroadcastServer {
             .map(|n| (n.to_string(), HashSet::new()))
             .collect();
 
-        //let seen = HashMap::new();
         let neighbours = Vec::new();
 
         let server = BroadcastServer {
             messages: HashSet::<usize>::new(),
             seen,
             neighbours,
+            pending_broadcasts: HashMap::<usize, (String, Payload)>::new(),
         };
 
         Ok(server)
@@ -87,17 +88,36 @@ impl Server<Payload, Timer> for BroadcastServer {
                     .cloned();
 
                 self.neighbours.extend(neighbours);
+                eprintln!("Discovered neighbours: {:?}", &self.neighbours);
 
                 let reply = Payload::TopologyOk;
                 io.reply_to(&input, reply)?;
             }
             Payload::TopologyOk => bail!("unexpected topology_ok message"),
             Payload::Broadcast { message } => {
+                if !self.messages.contains(message) {
+                    for n in self.neighbours.iter().cloned() {
+                        let dst = n.clone();
+                        let broadcast = Payload::Broadcast {
+                            message: message.clone(),
+                        };
+
+                        let req_id = io.request(dst.to_string(), broadcast.clone())?;
+                        self.pending_broadcasts.insert(req_id, (dst, broadcast));
+                    }
+                }
+
                 self.messages.insert(message.to_owned());
+
                 let reply = Payload::BroadcastOk;
                 io.reply_to(&input, reply)?;
             }
-            Payload::BroadcastOk => bail!("unexpected broadcast_ok message"),
+            Payload::BroadcastOk => {
+                if let Some(in_reply_to) = input.body.in_reply_to {
+                    _ = self.pending_broadcasts.remove(&in_reply_to);
+                    eprintln!("Got response for {}", in_reply_to);
+                }
+            }
             Payload::Read => {
                 let values = self.messages.to_owned();
                 let reply = Payload::ReadOk {
@@ -148,6 +168,21 @@ impl Server<Payload, Timer> for BroadcastServer {
                         let gossip = Payload::Gossip { messages: to_send };
                         io.send(n.to_string(), None, gossip)?;
                     }
+                }
+            }
+            Timer::RetryBroadcast => {
+                let keys: Vec<usize> = self.pending_broadcasts.keys().copied().collect();
+                eprintln!("will retry {:?}", keys);
+                for k in keys {
+                    let Some(retry) = &mut self.pending_broadcasts.remove(&k) else {
+                        bail!("this shouldn't happen");
+                    };
+
+                    let (dst, payload) = retry;
+
+                    let req_id = io.request(dst.to_string(), payload.clone())?;
+
+                    self.pending_broadcasts.insert(req_id, retry.clone());
                 }
             }
         }
