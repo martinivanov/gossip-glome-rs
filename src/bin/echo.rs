@@ -35,7 +35,7 @@ impl Server<Payload, ()> for EchoServer {
                 let reply = Payload::EchoOk {
                     echo: echo.to_string(),
                 };
-                io.reply_to(&input, reply)?;
+                io.rpc_reply_to(&input, reply)?;
             }
             Payload::EchoOk { .. } => {}
         };

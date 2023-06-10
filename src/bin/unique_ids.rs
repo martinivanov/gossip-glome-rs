@@ -34,7 +34,7 @@ impl Server<Payload, ()> for UniqueIdServer {
             Payload::Generate => {
                 let id = format!("{}-{}", cluster_state.node_id, io.seq);
                 let reply = Payload::GenerateOk { id };
-                io.reply_to(&input, reply)?;
+                io.rpc_reply_to(&input, reply)?;
             }
             Payload::GenerateOk { .. } => {
                 bail!("received unexpected GenerateOk message");

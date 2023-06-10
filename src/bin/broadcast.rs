@@ -91,7 +91,7 @@ impl Server<Payload, Timer> for BroadcastServer {
                 eprintln!("Discovered neighbours: {:?}", &self.neighbours);
 
                 let reply = Payload::TopologyOk;
-                io.reply_to(&input, reply)?;
+                io.rpc_reply_to(&input, reply)?;
             }
             Payload::TopologyOk => bail!("unexpected topology_ok message"),
             Payload::Broadcast { message } => {
@@ -102,28 +102,24 @@ impl Server<Payload, Timer> for BroadcastServer {
                             message: message.clone(),
                         };
 
-                        let req_id = io.request(dst.to_string(), broadcast.clone())?;
-                        self.pending_broadcasts.insert(req_id, (dst, broadcast));
+                        _ = io.rpc_request_with_retry(dst.to_string(), broadcast.clone())?;
                     }
                 }
 
                 self.messages.insert(message.to_owned());
 
                 let reply = Payload::BroadcastOk;
-                io.reply_to(&input, reply)?;
+                io.rpc_reply_to(&input, reply)?;
             }
             Payload::BroadcastOk => {
-                if let Some(in_reply_to) = input.body.in_reply_to {
-                    _ = self.pending_broadcasts.remove(&in_reply_to);
-                    eprintln!("Got response for {}", in_reply_to);
-                }
+                io.rpc_mark_completed(&input);
             }
             Payload::Read => {
                 let values = self.messages.to_owned();
                 let reply = Payload::ReadOk {
                     messages: values.into_iter().collect(),
                 };
-                io.reply_to(&input, reply)?;
+                io.rpc_reply_to(&input, reply)?;
             }
             Payload::ReadOk { .. } => bail!("unexpected read_ok message"),
             Payload::Gossip { messages } => {
@@ -171,19 +167,7 @@ impl Server<Payload, Timer> for BroadcastServer {
                 }
             }
             Timer::RetryBroadcast => {
-                let keys: Vec<usize> = self.pending_broadcasts.keys().copied().collect();
-                eprintln!("will retry {:?}", keys);
-                for k in keys {
-                    let Some(retry) = &mut self.pending_broadcasts.remove(&k) else {
-                        bail!("this shouldn't happen");
-                    };
-
-                    let (dst, payload) = retry;
-
-                    let req_id = io.request(dst.to_string(), payload.clone())?;
-
-                    self.pending_broadcasts.insert(req_id, retry.clone());
-                }
+                io.rpc_run_retries()?
             }
         }
 

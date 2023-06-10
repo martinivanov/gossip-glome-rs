@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     io::{BufRead, StdoutLock, Write},
     marker::PhantomData,
     sync::{
@@ -10,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 
 pub struct ClusterState {
     pub node_id: String,
@@ -25,11 +26,12 @@ where
     cluster_state: Arc<ClusterState>,
     stdout: StdoutLock<'a>,
     _payload: PhantomData<P>,
+    pending_requests: HashMap<usize, (String, P)>,
 }
 
 impl<'a, P> IO<'a, P>
 where
-    P: Serialize,
+    P: Serialize + Clone,
 {
     pub fn send(
         &mut self,
@@ -54,7 +56,6 @@ where
             .context("appending trailing newline")?;
         self.stdout.flush().context("flushing message to STDOUT")?;
 
-
         let seq = self.seq;
 
         self.seq += 1;
@@ -62,14 +63,51 @@ where
         Ok(seq)
     }
 
-    pub fn request(&mut self, dst: String, request: P) -> anyhow::Result<usize> {
+    pub fn fire_and_forget(&mut self, dst: String, message: P) -> anyhow::Result<()> {
+        // TODO: handle errors?
+        _ = self.send(dst, None, message);
+        Ok(())
+    }
+
+    pub fn rpc_request(&mut self, dst: String, request: P) -> anyhow::Result<usize> {
         self.send(dst, None, request)
     }
 
-    pub fn reply_to(&mut self, message: &Message<P>, reply: P) -> anyhow::Result<usize> {
+    pub fn rpc_request_with_retry(&mut self, dst: String, request: P) -> anyhow::Result<usize> {
+        let req_id = self.rpc_request(dst.to_string(), request.clone())?;
+        self.pending_requests.insert(req_id, (dst, request));
+        Ok(req_id)
+    }
+
+    pub fn rpc_reply_to(&mut self, message: &Message<P>, reply: P) -> anyhow::Result<usize> {
         let dst = message.src.clone();
         let in_reply_to = message.body.id;
         self.send(dst, in_reply_to, reply)
+    }
+
+    pub fn rpc_mark_completed(&mut self, message: &Message<P>) {
+        if let Some(in_reply_to) = message.body.in_reply_to {
+            _ = self.pending_requests.remove(&in_reply_to);
+        }
+    }
+
+    // or rpc_tend?
+    // return list of retried and potentially timed out requests?
+    pub fn rpc_run_retries(&mut self) -> anyhow::Result<()> {
+        let keys: Vec<usize> = self.pending_requests.keys().copied().collect();
+        for k in keys {
+            let Some(retry) = &mut self.pending_requests.remove(&k) else {
+                bail!("this shouldn't happen");
+            };
+
+            let (dst, payload) = retry;
+
+            let req_id = self.rpc_request(dst.to_string(), payload.clone())?;
+
+            self.pending_requests.insert(req_id, retry.clone());
+        }
+
+        Ok(())
     }
 }
 
@@ -119,6 +157,7 @@ where
             cluster_state: cluster_state.clone(),
             stdout: std::io::stdout().lock(),
             _payload: PhantomData,
+            pending_requests: HashMap::<usize, (String, P)>::new(),
         };
 
         let (in_tx, in_rx) = mpsc::channel();
@@ -140,9 +179,10 @@ where
             cluster_state: cluster_state.clone(),
             stdout: std::io::stdout().lock(),
             _payload: PhantomData,
+            pending_requests: HashMap::<usize, (String, InitPayload)>::new(),
         };
 
-        init_io.reply_to(&init_msg, InitPayload::InitOk)?;
+        init_io.rpc_reply_to(&init_msg, InitPayload::InitOk)?;
 
         Ok(node)
     }
@@ -204,17 +244,12 @@ where
         &mut self,
         cluster_state: &ClusterState,
         io: &mut IO<P>,
-        input: Message<P>
+        input: Message<P>,
     ) -> Result<()>
     where
         Self: Sized;
 
-    fn on_timer(
-        &mut self,
-        cluster_state: &ClusterState,
-        io: &mut IO<P>,
-        input: T,
-    ) -> Result<()>
+    fn on_timer(&mut self, cluster_state: &ClusterState, io: &mut IO<P>, input: T) -> Result<()>
     where
         Self: Sized;
 }
