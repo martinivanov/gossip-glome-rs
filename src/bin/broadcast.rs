@@ -1,20 +1,33 @@
-use gossip_glomers_rs::{ClusterState, Event, Message, Node, Server, Timers, IO};
+use gossip_glomers_rs::{ClusterState, Message, Node, Server, Timers, IO};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use anyhow::{bail, Result};
+
+use rand::seq::SliceRandom;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 enum Payload {
-    Topology,
+    Topology {
+        topology: HashMap<String, Vec<String>>,
+    },
     TopologyOk,
-    Broadcast { message: usize },
+    Broadcast {
+        message: usize,
+    },
     BroadcastOk,
     Read,
-    ReadOk { messages: Vec<usize> },
-    Gossip { message: String }
+    ReadOk {
+        messages: Vec<usize>,
+    },
+    Gossip {
+        messages: Vec<usize>,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -29,14 +42,30 @@ fn main() -> anyhow::Result<()> {
 
 struct BroadcastServer {
     messages: HashSet<usize>,
+    seen: HashMap<String, HashSet<usize>>,
+    neighbours: Vec<String>,
 }
 
 impl Server<Payload, Timer> for BroadcastServer {
-    fn init(_: &ClusterState, timers: &mut Timers<Payload, Timer>) -> Result<BroadcastServer> {
-        timers.register_timer(Timer::Gossip, Duration::from_millis(500));
+    fn init(
+        cluster_state: &ClusterState,
+        timers: &mut Timers<Payload, Timer>,
+    ) -> Result<BroadcastServer> {
+        timers.register_timer(Timer::Gossip, Duration::from_millis(300));
+
+        let seen = cluster_state
+            .node_ids
+            .iter()
+            .map(|n| (n.to_string(), HashSet::new()))
+            .collect();
+
+        //let seen = HashMap::new();
+        let neighbours = Vec::new();
 
         let server = BroadcastServer {
             messages: HashSet::<usize>::new(),
+            seen,
+            neighbours,
         };
 
         Ok(server)
@@ -44,13 +73,21 @@ impl Server<Payload, Timer> for BroadcastServer {
 
     fn on_message(
         &mut self,
-        _: &ClusterState,
+        cluster_state: &ClusterState,
         io: &mut IO<Payload>,
         input: Message<Payload>,
     ) -> Result<()> {
         let payload = &input.body.payload;
         match payload {
-            Payload::Topology => {
+            Payload::Topology { topology } => {
+                let neighbours = topology
+                    .get(&cluster_state.node_id)
+                    .unwrap()
+                    .iter()
+                    .cloned();
+
+                self.neighbours.extend(neighbours);
+
                 let reply = Payload::TopologyOk;
                 io.reply_to(&input, reply)?;
             }
@@ -69,24 +106,50 @@ impl Server<Payload, Timer> for BroadcastServer {
                 io.reply_to(&input, reply)?;
             }
             Payload::ReadOk { .. } => bail!("unexpected read_ok message"),
-            Payload::Gossip { message } => {
-                println!("{}", message);
+            Payload::Gossip { messages } => {
+                let new = messages
+                    .iter()
+                    .copied()
+                    .filter(|&m| self.messages.insert(m))
+                    .map(|m| m.clone());
+
+                self.seen
+                    .get_mut(&input.src)
+                    .expect("got gossip from unknown node")
+                    .extend(new);
             }
         };
 
         Ok(())
     }
 
-    fn on_timer(&mut self, cluster_state: &ClusterState, io: &mut IO<Payload>, input: Timer) -> Result<()>
+    fn on_timer(
+        &mut self,
+        cluster_state: &ClusterState,
+        io: &mut IO<Payload>,
+        input: Timer,
+    ) -> Result<()>
     where
         Self: Sized,
     {
         match input {
             Timer::Gossip => {
-                for n in &cluster_state.node_ids {
-                    io.send(n.clone(), None, Payload::Gossip { message: format!("{}-gosho", &n) })?;
+                //let dst = cluster_state
+                //    .node_ids
+                //    .choose(&mut rand::thread_rng())
+                //    .expect("couldn't pick random node")
+                //    .to_string();
+
+                for n in &self.neighbours {
+                    let dst_seen = &self.seen[n];
+                    let to_send: Vec<usize> = self.messages.difference(dst_seen).copied().collect();
+
+                    if !to_send.is_empty() {
+                        let gossip = Payload::Gossip { messages: to_send };
+                        io.send(n.to_string(), None, gossip)?;
+                    }
                 }
-            },
+            }
         }
 
         Ok(())
