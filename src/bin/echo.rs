@@ -1,7 +1,7 @@
 use gossip_glomers_rs::{ClusterState, Message, Node, Server, Timers, IO};
 use serde::{Deserialize, Serialize};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
@@ -35,7 +35,7 @@ impl Server<Payload, ()> for EchoServer {
                 let reply = Payload::EchoOk {
                     echo: echo.to_string(),
                 };
-                io.rpc_reply_to(&input, reply)?;
+                io.rpc_reply_to(&input, &reply)?;
             }
             Payload::EchoOk { .. } => {}
         };
@@ -48,5 +48,16 @@ impl Server<Payload, ()> for EchoServer {
         Self: Sized,
     {
         Ok(())
+    }
+
+    fn on_rpc_timeout(
+        &mut self,
+        _: &ClusterState,
+        _: gossip_glomers_rs::Request<Payload>,
+    ) -> Result<()>
+    where
+        Self: Sized,
+    {
+        bail!("unexpected RPC timeout");
     }
 }

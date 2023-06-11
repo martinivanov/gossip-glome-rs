@@ -34,7 +34,7 @@ impl Server<Payload, ()> for UniqueIdServer {
             Payload::Generate => {
                 let id = format!("{}-{}", cluster_state.node_id, io.seq);
                 let reply = Payload::GenerateOk { id };
-                io.rpc_reply_to(&input, reply)?;
+                io.rpc_reply_to(&input, &reply)?;
             }
             Payload::GenerateOk { .. } => {
                 bail!("received unexpected GenerateOk message");
@@ -49,5 +49,16 @@ impl Server<Payload, ()> for UniqueIdServer {
         Self: Sized,
     {
         todo!()
+    }
+
+    fn on_rpc_timeout(
+        &mut self,
+        _: &ClusterState,
+        _: gossip_glomers_rs::Request<Payload>,
+    ) -> Result<()>
+    where
+        Self: Sized,
+    {
+        bail!("unexpected RPC timeout");
     }
 }

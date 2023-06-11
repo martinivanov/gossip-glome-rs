@@ -18,6 +18,17 @@ pub struct ClusterState {
     pub node_ids: Vec<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct Request<P> {
+    pub id: usize,
+    pub dst: String,
+    pub payload: P,
+    pub timeout: Duration,
+    pub issued_at: Instant,
+    // TODO: encapsulate all retry parameters in an enum?
+    pub retry: bool,
+}
+
 pub struct IO<'a, P>
 where
     P: Serialize,
@@ -26,7 +37,7 @@ where
     cluster_state: Arc<ClusterState>,
     stdout: StdoutLock<'a>,
     _payload: PhantomData<P>,
-    pending_requests: HashMap<usize, (String, P, Duration, Instant)>,
+    pending_requests: HashMap<usize, Request<P>>,
 }
 
 impl<'a, P> IO<'a, P>
@@ -35,17 +46,17 @@ where
 {
     pub fn send(
         &mut self,
-        to: String,
+        to: &str,
         in_reply_to: Option<usize>,
-        payload: P,
+        payload: &P,
     ) -> anyhow::Result<usize> {
         let message = Message::<P> {
             src: self.cluster_state.node_id.clone(),
-            dst: to,
+            dst: to.to_string(),
             body: Body::<P> {
                 id: Some(self.seq),
                 in_reply_to,
-                payload,
+                payload: payload.clone(),
             },
         };
 
@@ -63,24 +74,46 @@ where
         Ok(seq)
     }
 
-    pub fn fire_and_forget(&mut self, dst: String, message: P) -> anyhow::Result<()> {
+    pub fn fire_and_forget(&mut self, dst: &str, message: &P) -> anyhow::Result<()> {
         // TODO: handle errors?
         _ = self.send(dst, None, message);
         Ok(())
     }
 
-    pub fn rpc_request(&mut self, dst: String, request: P) -> anyhow::Result<usize> {
-        self.send(dst, None, request)
+    pub fn rpc_request(
+        &mut self,
+        dst: &str,
+        request: &P,
+        timeout: Duration,
+        retry: bool,
+    ) -> anyhow::Result<usize> {
+        let dst = dst;
+        let id = self.send(dst, None, request)?;
+        let request = Request {
+            id,
+            dst: dst.to_string(), //TODO: try to do it with reference?
+            payload: request.clone(),
+            timeout,
+            issued_at: Instant::now(),
+            retry,
+        };
+
+        self.pending_requests.insert(id, request);
+
+        Ok(id)
     }
 
-    pub fn rpc_request_with_retry(&mut self, dst: String, request: P, retry_after: Duration) -> anyhow::Result<usize> {
-        let req_id = self.rpc_request(dst.to_string(), request.clone())?;
-        self.pending_requests.insert(req_id, (dst, request, retry_after, Instant::now()));
-        Ok(req_id)
+    pub fn rpc_request_with_retry(
+        &mut self,
+        dst: &str,
+        request: &P,
+        retry_after: Duration,
+    ) -> anyhow::Result<usize> {
+        self.rpc_request(dst, request, retry_after, true)
     }
 
-    pub fn rpc_reply_to(&mut self, message: &Message<P>, reply: P) -> anyhow::Result<usize> {
-        let dst = message.src.clone();
+    pub fn rpc_reply_to(&mut self, message: &Message<P>, reply: &P) -> anyhow::Result<usize> {
+        let dst = &message.src;
         let in_reply_to = message.body.id;
         self.send(dst, in_reply_to, reply)
     }
@@ -91,30 +124,36 @@ where
         }
     }
 
-    // or rpc_tend?
-    // return list of retried and potentially timed out requests?
-    pub fn rpc_run_retries(&mut self) -> anyhow::Result<()> {
-        let keys = self.pending_requests.iter().filter(|(k, (_, _, r, i))| { &i.elapsed() > r}).map(|(k, _)| { k }).copied();
+    pub fn rpc_tend(&mut self) -> anyhow::Result<Vec<Request<P>>> {
+        let keys: Vec<usize> = self
+            .pending_requests
+            .iter()
+            .filter(|(_, v)| v.issued_at.elapsed() > v.timeout)
+            .map(|(k, _)| k)
+            .copied()
+            .collect();
+
+        let mut timeouts = Vec::new();
         for k in keys {
-            let Some(retry) = &mut self.pending_requests.remove(&k) else {
+            let Some(request) = self.pending_requests.remove(&k) else {
                 bail!("this shouldn't happen");
             };
 
-            let (dst, payload, after, issued_at) = retry;
+            timeouts.push(request.clone());
 
-            let req_id = self.rpc_request(dst.to_string(), payload.clone())?;
-
-            self.pending_requests.insert(req_id, retry.clone());
+            if request.retry {
+                self.rpc_request_with_retry(&request.dst, &request.payload, request.timeout)?;
+            }
         }
 
-        Ok(())
+        Ok(timeouts)
     }
 }
 
 pub struct Node<'a, H, P, T>
 where
     H: Server<P, T>,
-    P: Sized + Serialize,
+    P: Sized + Serialize + Clone,
 {
     pub cluster_state: Arc<ClusterState>,
     pub io: IO<'a, P>,
@@ -127,7 +166,7 @@ where
 impl<'a, H, P, T> Node<'a, H, P, T>
 where
     H: Server<P, T>,
-    P: Send + Serialize + Deserialize<'a> + Send + 'static,
+    P: Send + Serialize + Deserialize<'a> + Send + Clone + 'static,
     T: Send + Clone + Copy + 'static,
 {
     pub fn init() -> anyhow::Result<Node<'a, H, P, T>> {
@@ -157,7 +196,7 @@ where
             cluster_state: cluster_state.clone(),
             stdout: std::io::stdout().lock(),
             _payload: PhantomData,
-            pending_requests: HashMap::<usize, (String, P, Duration, Instant)>::new(),
+            pending_requests: HashMap::<usize, Request<P>>::new(),
         };
 
         let (in_tx, in_rx) = mpsc::channel();
@@ -179,16 +218,16 @@ where
             cluster_state: cluster_state.clone(),
             stdout: std::io::stdout().lock(),
             _payload: PhantomData,
-            pending_requests: HashMap::<usize, (String, InitPayload, Duration, Instant)>::new(),
+            pending_requests: HashMap::<usize, Request<InitPayload>>::new(),
         };
 
-        init_io.rpc_reply_to(&init_msg, InitPayload::InitOk)?;
+        init_io.rpc_reply_to(&init_msg, &InitPayload::InitOk)?;
 
         Ok(node)
     }
 
     pub fn run(&mut self) -> anyhow::Result<()> {
-        let in_tx = self.in_tx.clone();
+        let stdin_tx = self.in_tx.clone();
         let jh = thread::spawn(move || {
             let stdin = std::io::stdin().lock();
             let in_stream = serde_json::Deserializer::from_reader(stdin).into_iter();
@@ -196,16 +235,24 @@ where
                 let msg: Message<P> = msg.context("failed to deserialize message from STDIN")?;
                 let event: Event<P, T> = Event::Message(msg);
 
-                if let Err(_) = in_tx.send(event) {
+                if let Err(_) = stdin_tx.send(event) {
                     return Ok::<_, anyhow::Error>(());
                 }
             }
 
-            if let Err(_) = in_tx.send(Event::EOF) {
+            if let Err(_) = stdin_tx.send(Event::EOF) {
                 return Ok::<_, anyhow::Error>(());
             }
 
             Ok(())
+        });
+
+        let tend_tx = self.in_tx.clone();
+        let tend_jh = thread::spawn(move || loop {
+            if let Err(_) = tend_tx.send(Event::InternalTick) {
+                return Ok::<_, anyhow::Error>(());
+            }
+            thread::sleep(Duration::from_millis(50))
         });
 
         self.timers.start();
@@ -222,11 +269,20 @@ where
                         .on_timer(&self.cluster_state, &mut self.io, timer)
                         .context("failed processing message")?;
                 }
+                Event::InternalTick => {
+                    let timeouts = self.io.rpc_tend()?;
+                    for r in timeouts {
+                        self.handler
+                            .on_rpc_timeout(&self.cluster_state, r)
+                            .context("failed processing message")?;
+                    }
+                }
                 Event::EOF => todo!(),
             }
         }
 
-        jh.join().expect("STDIN processing failed")?;
+        jh.join().expect("STDIN processing panicked")?;
+        tend_jh.join().expect("RPC tender panicked")?;
 
         Ok(())
     }
@@ -234,7 +290,7 @@ where
 
 pub trait Server<P, T>
 where
-    P: Serialize,
+    P: Serialize + Clone,
 {
     fn init(cluster_state: &ClusterState, timers: &mut Timers<P, T>) -> Result<Self>
     where
@@ -250,6 +306,10 @@ where
         Self: Sized;
 
     fn on_timer(&mut self, cluster_state: &ClusterState, io: &mut IO<P>, input: T) -> Result<()>
+    where
+        Self: Sized;
+
+    fn on_rpc_timeout(&mut self, cluster_state: &ClusterState, timeout: Request<P>) -> Result<()>
     where
         Self: Sized;
 }
@@ -288,6 +348,7 @@ pub struct Message<P> {
 pub enum Event<P, T> {
     Timer(T),
     Message(Message<P>),
+    InternalTick,
     EOF,
 }
 

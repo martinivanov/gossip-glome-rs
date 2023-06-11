@@ -31,7 +31,6 @@ enum Payload {
 #[derive(Clone, Copy, Debug)]
 enum Timer {
     Gossip,
-    RetryBroadcast,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -43,7 +42,6 @@ struct BroadcastServer {
     messages: HashSet<usize>,
     seen: HashMap<String, HashSet<usize>>,
     neighbours: Vec<String>,
-    pending_broadcasts: HashMap<usize, (String, Payload)>,
 }
 
 impl Server<Payload, Timer> for BroadcastServer {
@@ -51,8 +49,7 @@ impl Server<Payload, Timer> for BroadcastServer {
         cluster_state: &ClusterState,
         timers: &mut Timers<Payload, Timer>,
     ) -> Result<BroadcastServer> {
-        //timers.register_timer(Timer::Gossip, Duration::from_millis(300));
-        timers.register_timer(Timer::RetryBroadcast, Duration::from_millis(1000));
+        timers.register_timer(Timer::Gossip, Duration::from_millis(1000));
 
         let seen = cluster_state
             .node_ids
@@ -66,7 +63,6 @@ impl Server<Payload, Timer> for BroadcastServer {
             messages: HashSet::<usize>::new(),
             seen,
             neighbours,
-            pending_broadcasts: HashMap::<usize, (String, Payload)>::new(),
         };
 
         Ok(server)
@@ -91,25 +87,24 @@ impl Server<Payload, Timer> for BroadcastServer {
                 eprintln!("Discovered neighbours: {:?}", &self.neighbours);
 
                 let reply = Payload::TopologyOk;
-                io.rpc_reply_to(&input, reply)?;
+                io.rpc_reply_to(&input, &reply)?;
             }
             Payload::TopologyOk => bail!("unexpected topology_ok message"),
             Payload::Broadcast { message } => {
-                if !self.messages.contains(message) {
-                    for n in self.neighbours.iter().cloned() {
-                        let dst = n.clone();
-                        let broadcast = Payload::Broadcast {
-                            message: message.clone(),
-                        };
+                //if !self.messages.contains(message) {
+                //    for n in self.neighbours.iter().cloned() {
+                //        let broadcast = Payload::Broadcast {
+                //            message: message.clone(),
+                //        };
 
-                        _ = io.rpc_request_with_retry(dst.to_string(), broadcast.clone())?;
-                    }
-                }
+                //        _ = io.rpc_request_with_retry(&n, &broadcast, Duration::from_millis(300))?;
+                //    }
+                //}
 
                 self.messages.insert(message.to_owned());
 
                 let reply = Payload::BroadcastOk;
-                io.rpc_reply_to(&input, reply)?;
+                io.rpc_reply_to(&input, &reply)?;
             }
             Payload::BroadcastOk => {
                 io.rpc_mark_completed(&input);
@@ -119,7 +114,7 @@ impl Server<Payload, Timer> for BroadcastServer {
                 let reply = Payload::ReadOk {
                     messages: values.into_iter().collect(),
                 };
-                io.rpc_reply_to(&input, reply)?;
+                io.rpc_reply_to(&input, &reply)?;
             }
             Payload::ReadOk { .. } => bail!("unexpected read_ok message"),
             Payload::Gossip { messages } => {
@@ -141,7 +136,7 @@ impl Server<Payload, Timer> for BroadcastServer {
 
     fn on_timer(
         &mut self,
-        cluster_state: &ClusterState,
+        _: &ClusterState,
         io: &mut IO<Payload>,
         input: Timer,
     ) -> Result<()>
@@ -150,26 +145,30 @@ impl Server<Payload, Timer> for BroadcastServer {
     {
         match input {
             Timer::Gossip => {
-                //let dst = cluster_state
-                //    .node_ids
-                //    .choose(&mut rand::thread_rng())
-                //    .expect("couldn't pick random node")
-                //    .to_string();
-
                 for n in &self.neighbours {
                     let dst_seen = &self.seen[n];
                     let to_send: Vec<usize> = self.messages.difference(dst_seen).copied().collect();
 
                     if !to_send.is_empty() {
                         let gossip = Payload::Gossip { messages: to_send };
-                        io.send(n.to_string(), None, gossip)?;
+                        io.fire_and_forget(n, &gossip)?;
                     }
                 }
             }
-            Timer::RetryBroadcast => {
-                io.rpc_run_retries()?
-            }
         }
+
+        Ok(())
+    }
+
+    fn on_rpc_timeout(
+        &mut self,
+        _: &ClusterState,
+        timeout: gossip_glomers_rs::Request<Payload>,
+    ) -> Result<()>
+    where
+        Self: Sized,
+    {
+        eprintln!("Timeout: {:?}", timeout);
 
         Ok(())
     }
