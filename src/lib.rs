@@ -8,7 +8,7 @@ use std::{
         Arc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context, Result};
@@ -26,7 +26,7 @@ where
     cluster_state: Arc<ClusterState>,
     stdout: StdoutLock<'a>,
     _payload: PhantomData<P>,
-    pending_requests: HashMap<usize, (String, P)>,
+    pending_requests: HashMap<usize, (String, P, Duration, Instant)>,
 }
 
 impl<'a, P> IO<'a, P>
@@ -73,9 +73,9 @@ where
         self.send(dst, None, request)
     }
 
-    pub fn rpc_request_with_retry(&mut self, dst: String, request: P) -> anyhow::Result<usize> {
+    pub fn rpc_request_with_retry(&mut self, dst: String, request: P, retry_after: Duration) -> anyhow::Result<usize> {
         let req_id = self.rpc_request(dst.to_string(), request.clone())?;
-        self.pending_requests.insert(req_id, (dst, request));
+        self.pending_requests.insert(req_id, (dst, request, retry_after, Instant::now()));
         Ok(req_id)
     }
 
@@ -94,13 +94,13 @@ where
     // or rpc_tend?
     // return list of retried and potentially timed out requests?
     pub fn rpc_run_retries(&mut self) -> anyhow::Result<()> {
-        let keys: Vec<usize> = self.pending_requests.keys().copied().collect();
+        let keys = self.pending_requests.iter().filter(|(k, (_, _, r, i))| { &i.elapsed() > r}).map(|(k, _)| { k }).copied();
         for k in keys {
             let Some(retry) = &mut self.pending_requests.remove(&k) else {
                 bail!("this shouldn't happen");
             };
 
-            let (dst, payload) = retry;
+            let (dst, payload, after, issued_at) = retry;
 
             let req_id = self.rpc_request(dst.to_string(), payload.clone())?;
 
@@ -157,7 +157,7 @@ where
             cluster_state: cluster_state.clone(),
             stdout: std::io::stdout().lock(),
             _payload: PhantomData,
-            pending_requests: HashMap::<usize, (String, P)>::new(),
+            pending_requests: HashMap::<usize, (String, P, Duration, Instant)>::new(),
         };
 
         let (in_tx, in_rx) = mpsc::channel();
@@ -179,7 +179,7 @@ where
             cluster_state: cluster_state.clone(),
             stdout: std::io::stdout().lock(),
             _payload: PhantomData,
-            pending_requests: HashMap::<usize, (String, InitPayload)>::new(),
+            pending_requests: HashMap::<usize, (String, InitPayload, Duration, Instant)>::new(),
         };
 
         init_io.rpc_reply_to(&init_msg, InitPayload::InitOk)?;
