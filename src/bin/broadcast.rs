@@ -49,7 +49,7 @@ impl Server<Payload, Timer> for BroadcastServer {
         cluster_state: &ClusterState,
         timers: &mut Timers<Payload, Timer>,
     ) -> Result<BroadcastServer> {
-        timers.register_timer(Timer::Gossip, Duration::from_millis(1000));
+        //timers.register_timer(Timer::Gossip, Duration::from_millis(3400));
 
         let seen = cluster_state
             .node_ids
@@ -91,15 +91,15 @@ impl Server<Payload, Timer> for BroadcastServer {
             }
             Payload::TopologyOk => bail!("unexpected topology_ok message"),
             Payload::Broadcast { message } => {
-                //if !self.messages.contains(message) {
-                //    for n in self.neighbours.iter().cloned() {
-                //        let broadcast = Payload::Broadcast {
-                //            message: message.clone(),
-                //        };
+                if !self.messages.contains(message) {
+                    for n in self.neighbours.iter().cloned() {
+                        let broadcast = Payload::Broadcast {
+                            message: message.clone(),
+                        };
 
-                //        _ = io.rpc_request_with_retry(&n, &broadcast, Duration::from_millis(300))?;
-                //    }
-                //}
+                        _ = io.rpc_request_with_retry(&n, &broadcast, Duration::from_millis(300))?;
+                    }
+                }
 
                 self.messages.insert(message.to_owned());
 

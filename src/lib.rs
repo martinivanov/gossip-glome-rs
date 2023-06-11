@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    cmp,
     collections::HashMap,
     io::{BufRead, StdoutLock, Write},
     marker::PhantomData,
@@ -17,6 +18,13 @@ pub struct ClusterState {
     pub node_id: String,
     pub node_ids: Vec<String>,
 }
+
+//pub enum RPCRetryPolicy {
+//    None,
+//    FixedInterval,
+//    ExponentialBackoffRetry {
+//    }
+//}
 
 #[derive(Clone, Debug)]
 pub struct Request<P> {
@@ -124,29 +132,24 @@ where
         }
     }
 
-    pub fn rpc_tend(&mut self) -> anyhow::Result<Vec<Request<P>>> {
-        let keys: Vec<usize> = self
+    pub fn rpc_tend(&mut self) -> anyhow::Result<(Vec<Request<P>>, Duration)> {
+        let (timedout, future): (Vec<Request<P>>, Vec<Request<P>>) = self
             .pending_requests
-            .iter()
-            .filter(|(_, v)| v.issued_at.elapsed() > v.timeout)
-            .map(|(k, _)| k)
-            .copied()
-            .collect();
-
-        let mut timeouts = Vec::new();
-        for k in keys {
-            let Some(request) = self.pending_requests.remove(&k) else {
+            .values()
+            .cloned()
+            .partition(|r| r.issued_at.elapsed() >= r.timeout);
+        for r in &timedout {
+            let Some(request) = self.pending_requests.remove(&r.id) else {
                 bail!("this shouldn't happen");
             };
-
-            timeouts.push(request.clone());
 
             if request.retry {
                 self.rpc_request_with_retry(&request.dst, &request.payload, request.timeout)?;
             }
         }
 
-        Ok(timeouts)
+        let sleep = future.iter().map(|r| r.timeout - r.issued_at.elapsed()).min().unwrap_or(Duration::MAX);
+        Ok((timedout, sleep))
     }
 }
 
@@ -247,17 +250,9 @@ where
             Ok(())
         });
 
-        let tend_tx = self.in_tx.clone();
-        let tend_jh = thread::spawn(move || loop {
-            if let Err(_) = tend_tx.send(Event::InternalTick) {
-                return Ok::<_, anyhow::Error>(());
-            }
-            thread::sleep(Duration::from_millis(50))
-        });
-
-        self.timers.start();
-
-        for event in &self.in_rx {
+        let mut sleep = Duration::ZERO;
+        loop {
+            let event = self.in_rx.recv_timeout(sleep).unwrap_or(Event::Tick);
             match event {
                 Event::Message(message) => {
                     self.handler
@@ -269,20 +264,23 @@ where
                         .on_timer(&self.cluster_state, &mut self.io, timer)
                         .context("failed processing message")?;
                 }
-                Event::InternalTick => {
-                    let timeouts = self.io.rpc_tend()?;
+                Event::Tick => {
+                    let (timeouts, next_timeout) = self.io.rpc_tend()?;
+                    sleep = cmp::min(next_timeout, Duration::from_millis(1000));
                     for r in timeouts {
                         self.handler
                             .on_rpc_timeout(&self.cluster_state, r)
                             .context("failed processing message")?;
                     }
+
+                    let to_next_timer = self.timers.fire()?;
+                    sleep = cmp::min(sleep, to_next_timer);
                 }
-                Event::EOF => todo!(),
+                Event::EOF => break,
             }
         }
 
         jh.join().expect("STDIN processing panicked")?;
-        tend_jh.join().expect("RPC tender panicked")?;
 
         Ok(())
     }
@@ -348,12 +346,19 @@ pub struct Message<P> {
 pub enum Event<P, T> {
     Timer(T),
     Message(Message<P>),
-    InternalTick,
+    Tick,
     EOF,
 }
 
+#[derive(Copy, Clone)]
+struct TimerRegistration<T> {
+    timer: T,
+    interval: Duration,
+    last_fire: Instant,
+}
+
 pub struct Timers<P, T> {
-    regs: Vec<(T, Duration)>,
+    regs: Vec<TimerRegistration<T>>,
     trigger: Sender<Event<P, T>>,
 }
 
@@ -369,20 +374,30 @@ where
         }
     }
 
-    fn start(&mut self) {
-        for (timer, interval) in &self.regs {
-            let timer = *timer;
-            let interval = interval.clone();
-            let tx = self.trigger.clone();
-            thread::spawn(move || loop {
-                thread::sleep(interval);
-                let event: Event<P, T> = Event::<P, T>::Timer(timer);
-                _ = tx.send(event);
-            });
-        }
+    pub fn register_timer(&mut self, timer: T, interval: Duration) {
+        let reg = TimerRegistration {
+            timer,
+            interval,
+            last_fire: Instant::now(),
+        };
+
+        self.regs.push(reg);
     }
 
-    pub fn register_timer(&mut self, timer: T, interval: Duration) {
-        self.regs.push((timer, interval));
+    fn fire(&mut self) -> anyhow::Result<Duration> {
+        let mut sleep = Duration::MAX;
+        for reg in &mut self.regs {
+            let event: Event<P, T> = Event::<P, T>::Timer(reg.timer);
+            if reg.last_fire.elapsed() >= reg.interval {
+                if let Err(_) = self.trigger.send(event) {
+                    anyhow::bail!("")
+                }
+                reg.last_fire = Instant::now();
+            } else {
+                sleep = cmp::min(sleep, reg.last_fire.elapsed());
+            }
+        }
+
+        Ok(sleep)
     }
 }
