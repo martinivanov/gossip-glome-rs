@@ -14,6 +14,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 
+// TODO: membership table?
 pub struct ClusterState {
     pub node_id: String,
     pub node_ids: Vec<String>,
