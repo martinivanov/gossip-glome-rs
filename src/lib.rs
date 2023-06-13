@@ -173,6 +173,8 @@ where
     timers: Timers<P, T>,
 }
 
+const TICK_DURATION: Duration = Duration::from_millis(1000);
+
 impl<'a, H, P, T> Node<'a, H, P, T>
 where
     H: Server<P, T>,
@@ -257,13 +259,10 @@ where
             Ok(())
         });
 
-        const TICK_DURATION: Duration = Duration::from_millis(1000);
-
-        let mut sleep = Duration::ZERO;
+        let mut tick_timeout = Duration::ZERO;
         let mut last_tick = Instant::now();
-        let mut counter = 0;
         loop {
-            let event = self.in_rx.recv_timeout(sleep).unwrap_or(Event::Tick);
+            let event = self.in_rx.recv_timeout(tick_timeout).unwrap_or(Event::Tick);
             match event {
                 Event::Message(message) => {
                     self.handler
@@ -276,13 +275,14 @@ where
                         .context("failed processing message")?;
                 }
                 Event::EOF => break,
-                Event::Tick => {}
+                Event::Tick => ()
             }
 
             let since_last_tick = last_tick.elapsed();
-            if since_last_tick >= sleep {
-                let (timeouts, next_timeout) = self.io.rpc_tend()?;
-                sleep = cmp::min(next_timeout, TICK_DURATION);
+
+            if since_last_tick >= tick_timeout {
+                let (timeouts, to_next_timeout) = self.io.rpc_tend()?;
+                tick_timeout = cmp::min(to_next_timeout, TICK_DURATION);
                 for r in timeouts {
                     self.handler
                         .on_rpc_timeout(&self.cluster_state, r)
@@ -290,12 +290,10 @@ where
                 }
 
                 let to_next_timer = self.timers.fire()?;
-                sleep = cmp::min(sleep, to_next_timer);
+                tick_timeout = cmp::min(tick_timeout, to_next_timer);
             } else {
-                sleep = cmp::max(Duration::ZERO, sleep - since_last_tick);
+                tick_timeout = tick_timeout - cmp::min(tick_timeout, since_last_tick);
             }
-
-            counter += 1;
 
             last_tick = Instant::now();
         }
