@@ -139,6 +139,7 @@ where
             .values()
             .cloned()
             .partition(|r| r.issued_at.elapsed() >= r.timeout);
+
         for r in &timedout {
             let Some(request) = self.pending_requests.remove(&r.id) else {
                 bail!("this shouldn't happen");
@@ -149,7 +150,12 @@ where
             }
         }
 
-        let sleep = future.iter().map(|r| r.timeout - r.issued_at.elapsed()).min().unwrap_or(Duration::MAX);
+        let sleep = future
+            .iter()
+            .map(|r| r.timeout - r.timeout.min(r.issued_at.elapsed()))
+            .min()
+            .unwrap_or(Duration::MAX);
+
         Ok((timedout, sleep))
     }
 }
@@ -251,7 +257,11 @@ where
             Ok(())
         });
 
+        const TICK_DURATION: Duration = Duration::from_millis(1000);
+
         let mut sleep = Duration::ZERO;
+        let mut last_tick = Instant::now();
+        let mut counter = 0;
         loop {
             let event = self.in_rx.recv_timeout(sleep).unwrap_or(Event::Tick);
             match event {
@@ -265,20 +275,29 @@ where
                         .on_timer(&self.cluster_state, &mut self.io, timer)
                         .context("failed processing message")?;
                 }
-                Event::Tick => {
-                    let (timeouts, next_timeout) = self.io.rpc_tend()?;
-                    sleep = cmp::min(next_timeout, Duration::from_millis(1000));
-                    for r in timeouts {
-                        self.handler
-                            .on_rpc_timeout(&self.cluster_state, r)
-                            .context("failed processing message")?;
-                    }
-
-                    let to_next_timer = self.timers.fire()?;
-                    sleep = cmp::min(sleep, to_next_timer);
-                }
                 Event::EOF => break,
+                Event::Tick => {}
             }
+
+            let since_last_tick = last_tick.elapsed();
+            if since_last_tick >= sleep {
+                let (timeouts, next_timeout) = self.io.rpc_tend()?;
+                sleep = cmp::min(next_timeout, TICK_DURATION);
+                for r in timeouts {
+                    self.handler
+                        .on_rpc_timeout(&self.cluster_state, r)
+                        .context("failed processing message")?;
+                }
+
+                let to_next_timer = self.timers.fire()?;
+                sleep = cmp::min(sleep, to_next_timer);
+            } else {
+                sleep = cmp::max(Duration::ZERO, sleep - since_last_tick);
+            }
+
+            counter += 1;
+
+            last_tick = Instant::now();
         }
 
         jh.join().expect("STDIN processing panicked")?;
@@ -388,14 +407,16 @@ where
     fn fire(&mut self) -> anyhow::Result<Duration> {
         let mut sleep = Duration::MAX;
         for reg in &mut self.regs {
-            let event: Event<P, T> = Event::<P, T>::Timer(reg.timer);
-            if reg.last_fire.elapsed() >= reg.interval {
+            let last_fire = reg.last_fire.elapsed();
+            if last_fire >= reg.interval {
+                let event: Event<P, T> = Event::<P, T>::Timer(reg.timer);
                 if let Err(_) = self.trigger.send(event) {
                     anyhow::bail!("")
                 }
                 reg.last_fire = Instant::now();
+                sleep = cmp::min(sleep, reg.interval);
             } else {
-                sleep = cmp::min(sleep, reg.last_fire.elapsed());
+                sleep = reg.interval - last_fire;
             }
         }
 
