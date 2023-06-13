@@ -19,7 +19,7 @@ enum Payload {
     TopologyOk,
     Broadcast {
         message: Option<usize>,
-        batch: Option<Vec<usize>>,
+        batch: Option<HashSet<usize>>,
     },
     BroadcastOk,
     Read,
@@ -45,7 +45,7 @@ struct BroadcastServer {
     messages: HashSet<usize>,
     seen: HashMap<String, HashSet<usize>>,
     neighbours: Vec<String>,
-    outbox: Vec<usize>,
+    outbox: HashSet<usize>,
 }
 
 impl Server<Payload, Timer> for BroadcastServer {
@@ -109,7 +109,7 @@ impl Server<Payload, Timer> for BroadcastServer {
             messages: HashSet::<usize>::new(),
             seen,
             neighbours,
-            outbox: Vec::new(),
+            outbox: HashSet::new(),
         };
 
         Ok(server)
@@ -141,7 +141,7 @@ impl Server<Payload, Timer> for BroadcastServer {
                 match (message, batch) {
                     (Some(m), None) => {
                         if self.messages.insert(m.clone()) {
-                            self.outbox.push(m.clone());
+                            self.outbox.insert(m.clone());
                         }
                     }
                     (None, Some(b)) => {
@@ -194,13 +194,15 @@ impl Server<Payload, Timer> for BroadcastServer {
     {
         match input {
             Timer::Gossip => {
-                for n in &self.neighbours {
-                    let broadcast = Payload::Broadcast {
-                        message: None,
-                        batch: Some(self.outbox.clone()),
-                    };
+                if !self.outbox.is_empty() {
+                    for n in &self.neighbours {
+                        let broadcast = Payload::Broadcast {
+                            message: None,
+                            batch: Some(self.outbox.clone()),
+                        };
 
-                    _ = io.rpc_request_with_retry(&n, &broadcast, Duration::from_millis(400))?;
+                        _ = io.rpc_request_with_retry(&n, &broadcast, Duration::from_millis(400))?;
+                    }
 
                     self.outbox.clear();
                 }
