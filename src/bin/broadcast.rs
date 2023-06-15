@@ -47,7 +47,7 @@ struct BroadcastServer {
 impl Server<Payload, Timer> for BroadcastServer {
     fn init(
         cluster_state: &ClusterState,
-        timers: &mut Timers<Payload, Timer>,
+        _timers: &mut Timers<Payload, Timer>,
     ) -> Result<BroadcastServer> {
         //timers.register_timer(Timer::Gossip, Duration::from_millis(3400));
 
@@ -92,12 +92,12 @@ impl Server<Payload, Timer> for BroadcastServer {
             Payload::TopologyOk => bail!("unexpected topology_ok message"),
             Payload::Broadcast { message } => {
                 if !self.messages.contains(message) {
-                    for n in self.neighbours.iter().cloned() {
+                    for n in self.neighbours.iter() {
                         let broadcast = Payload::Broadcast {
-                            message: message.clone(),
+                            message: *message,
                         };
 
-                        _ = io.rpc_request_with_retry(&n, &broadcast, Duration::from_millis(300))?;
+                        _ = io.rpc_request_with_retry(n, &broadcast, Duration::from_millis(300))?;
                     }
                 }
 
@@ -121,8 +121,7 @@ impl Server<Payload, Timer> for BroadcastServer {
                 let new = messages
                     .iter()
                     .copied()
-                    .filter(|&m| self.messages.insert(m))
-                    .map(|m| m.clone());
+                    .filter(|&m| self.messages.insert(m));
 
                 self.seen
                     .get_mut(&input.src)

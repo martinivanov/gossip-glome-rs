@@ -3,7 +3,7 @@ use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    time::Duration, iter,
+    time::Duration,
 };
 
 use anyhow::{bail, Result};
@@ -48,7 +48,7 @@ struct BroadcastServer {
 impl Server<Payload, Timer> for BroadcastServer {
     fn init(
         cluster_state: &ClusterState,
-        timers: &mut Timers<Payload, Timer>,
+        _timers: &mut Timers<Payload, Timer>,
     ) -> Result<BroadcastServer> {
         //timers.register_timer(Timer::Gossip, Duration::from_millis(250));
 
@@ -113,13 +113,13 @@ impl Server<Payload, Timer> for BroadcastServer {
 
     fn on_message(
         &mut self,
-        cluster_state: &ClusterState,
+        _cluster_state: &ClusterState,
         io: &mut IO<Payload>,
         input: Message<Payload>,
     ) -> Result<()> {
         let payload = &input.body.payload;
         match payload {
-            Payload::Topology { topology } => {
+            Payload::Topology { topology: _ } => {
                 //let neighbours = topology
                 //    .get(&cluster_state.node_id)
                 //    .unwrap()
@@ -134,7 +134,7 @@ impl Server<Payload, Timer> for BroadcastServer {
             }
             Payload::TopologyOk => bail!("unexpected topology_ok message"),
             Payload::Broadcast { message } => {
-                if self.messages.insert(message.clone()) {
+                if self.messages.insert(*message) {
                     eprintln!("Sending message {} to all our neighbours: {:?}", message, self.neighbours);
                     for n in &self.neighbours {
                         if n == &input.src {
@@ -143,10 +143,10 @@ impl Server<Payload, Timer> for BroadcastServer {
                         }
 
                         let broadcast = Payload::Broadcast {
-                            message: message.clone(),
+                            message: *message,
                         };
 
-                        _ = io.rpc_request_with_retry(&n, &broadcast, Duration::from_millis(400))?;
+                        _ = io.rpc_request_with_retry(n, &broadcast, Duration::from_millis(400))?;
                     }
                 } else {
                     eprintln!("Skipping message {} from {} as we already have it", message, input.src);
@@ -170,8 +170,7 @@ impl Server<Payload, Timer> for BroadcastServer {
                 let new = messages
                     .iter()
                     .copied()
-                    .filter(|&m| self.messages.insert(m))
-                    .map(|m| m.clone());
+                    .filter(|&m| self.messages.insert(m));
 
                 self.seen
                     .get_mut(&input.src)

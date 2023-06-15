@@ -1,9 +1,7 @@
 use gossip_glomers_rs::{ClusterState, Message, Node, Server, Timers, IO};
-use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    iter,
     time::Duration,
 };
 
@@ -133,13 +131,13 @@ impl Server<Payload, Timer> for BroadcastServer {
             Payload::Broadcast { message, batch } => {
                 match (message, batch) {
                     (Some(m), None) => {
-                        if self.messages.insert(m.clone()) {
-                            self.outbox.insert(m.clone());
+                        if self.messages.insert(*m) {
+                            self.outbox.insert(*m);
                         }
                     }
                     (None, Some(b)) => {
                         let diff: Vec<usize> = b.difference(&self.messages).cloned().collect();
-                        self.messages.extend(diff.clone());
+                        self.messages.extend(diff);
                         self.outbox.extend(b);
                     }
                     (None, None) => bail!("Impossible"),
@@ -164,8 +162,7 @@ impl Server<Payload, Timer> for BroadcastServer {
                 let new = messages
                     .iter()
                     .copied()
-                    .filter(|&m| self.messages.insert(m))
-                    .map(|m| m.clone());
+                    .filter(|&m| self.messages.insert(m));
 
                 self.seen
                     .get_mut(&input.src)
@@ -179,7 +176,7 @@ impl Server<Payload, Timer> for BroadcastServer {
 
     fn on_timer(
         &mut self,
-        cluster_state: &ClusterState,
+        _: &ClusterState,
         io: &mut IO<Payload>,
         input: Timer,
     ) -> Result<()>
@@ -195,7 +192,7 @@ impl Server<Payload, Timer> for BroadcastServer {
                             batch: Some(self.outbox.clone()),
                         };
 
-                        _ = io.rpc_request_with_retry(&n, &broadcast, Duration::from_millis(400))?;
+                        _ = io.rpc_request_with_retry(n, &broadcast, Duration::from_millis(400))?;
                     }
 
                     self.outbox.clear();

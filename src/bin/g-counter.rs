@@ -2,7 +2,6 @@ use gossip_glomers_rs::{ClusterState, Message, Node, Server, Timers, IO};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    iter::Map,
     time::Duration,
 };
 
@@ -42,7 +41,7 @@ impl GCounter {
     }
 
     fn add(&mut self, node: String, id: usize, value: usize) -> anyhow::Result<()> {
-        let counter = self.node_counters.entry(node).or_insert_with(|| HashSet::<(usize, usize)>::new());
+        let counter = self.node_counters.entry(node).or_insert_with(HashSet::<(usize, usize)>::new);
         counter.insert((id, value));
         Ok(())
     }
@@ -51,7 +50,7 @@ impl GCounter {
         let total: usize = self
             .node_counters
             .values()
-            .flat_map(|c| c)
+            .flatten()
             .map(|(_, v)| v)
             .sum();
         Ok(total)
@@ -65,10 +64,8 @@ struct GCounterServer {
 impl Server<Payload, Timer> for GCounterServer {
     fn init(
         _: &ClusterState,
-        timers: &mut Timers<Payload, Timer>,
+        _: &mut Timers<Payload, Timer>,
     ) -> Result<GCounterServer> {
-        //timers.register_timer(Timer::Replicate, Duration::from_millis(250));
-
         let server = GCounterServer {
             gcounter: GCounter::new(),
         };
@@ -90,11 +87,11 @@ impl Server<Payload, Timer> for GCounterServer {
                     
                 };
 
-                self.gcounter.add(input.src.to_string(), id, delta.clone())?;
+                self.gcounter.add(input.src.to_string(), id, *delta)?;
 
                 for node in cluster_state.node_ids.iter().filter(|&n| n != &cluster_state.node_id && n != &input.src) {
                     let mut values = HashSet::<(usize, usize)>::new();
-                    values.insert((id, delta.clone()));
+                    values.insert((id, *delta));
 
                     let replicate = Payload::Replicate {
                         values
@@ -117,8 +114,8 @@ impl Server<Payload, Timer> for GCounterServer {
             Payload::ReadOk { .. } => bail!("unexpected read_ok message"),
             Payload::Replicate { values } => {
                 for v in values {
-                    let (id, value) = v.clone();
-                    self.gcounter.add(input.src.to_string(), id.clone(), value.clone())?;
+                    let (id, value) = *v;
+                    self.gcounter.add(input.src.to_string(), id, value)?;
                 }
             },
             Payload::ReplicateOk => {
@@ -128,7 +125,7 @@ impl Server<Payload, Timer> for GCounterServer {
         Ok(())
     }
 
-    fn on_timer(&mut self, _: &ClusterState, io: &mut IO<Payload>, input: Timer) -> Result<()>
+    fn on_timer(&mut self, _: &ClusterState, _: &mut IO<Payload>, _: Timer) -> Result<()>
     where
         Self: Sized,
     {

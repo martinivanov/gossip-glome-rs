@@ -251,12 +251,12 @@ where
                 let msg: Message<P> = msg.context("failed to deserialize message from STDIN")?;
                 let event: Event<P, T> = Event::Message(msg);
 
-                if let Err(_) = stdin_tx.send(event) {
+                if stdin_tx.send(event).is_err() {
                     return Ok::<_, anyhow::Error>(());
                 }
             }
 
-            if let Err(_) = stdin_tx.send(Event::EOF) {
+            if stdin_tx.send(Event::EOF).is_err() {
                 return Ok::<_, anyhow::Error>(());
             }
 
@@ -412,7 +412,7 @@ where
             let last_fire = reg.last_fire.elapsed();
             if last_fire >= reg.interval {
                 let event: Event<P, T> = Event::<P, T>::Timer(reg.timer);
-                if let Err(_) = self.trigger.send(event) {
+                if self.trigger.send(event).is_err() {
                     anyhow::bail!("")
                 }
                 reg.last_fire = Instant::now();
