@@ -1,7 +1,7 @@
 use gossip_glomers_rs::{ClusterState, Message, Node, Server, Timers, IO};
 use serde::{Deserialize, Serialize};
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type")]

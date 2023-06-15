@@ -174,12 +174,7 @@ impl Server<Payload, Timer> for BroadcastServer {
         Ok(())
     }
 
-    fn on_timer(
-        &mut self,
-        _: &ClusterState,
-        io: &mut IO<Payload>,
-        input: Timer,
-    ) -> Result<()>
+    fn on_timer(&mut self, _: &ClusterState, io: &mut IO<Payload>, input: Timer) -> Result<()>
     where
         Self: Sized,
     {

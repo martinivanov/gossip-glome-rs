@@ -296,7 +296,9 @@ where
                 let to_next_timer = self.timers.fire()?;
                 tick_timeout = cmp::min(tick_timeout, to_next_timer);
             } else {
-                tick_timeout = tick_timeout.checked_sub(since_last_tick).unwrap_or_default();
+                tick_timeout = tick_timeout
+                    .checked_sub(since_last_tick)
+                    .unwrap_or_default();
             }
 
             last_tick = Instant::now();

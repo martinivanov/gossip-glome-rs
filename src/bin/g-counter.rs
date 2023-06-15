@@ -36,23 +36,21 @@ struct GCounter {
 impl GCounter {
     fn new() -> Self {
         GCounter {
-            node_counters: HashMap::<String, HashSet<(usize, usize)>>::new()
+            node_counters: HashMap::<String, HashSet<(usize, usize)>>::new(),
         }
     }
 
     fn add(&mut self, node: String, id: usize, value: usize) -> anyhow::Result<()> {
-        let counter = self.node_counters.entry(node).or_insert_with(HashSet::<(usize, usize)>::new);
+        let counter = self
+            .node_counters
+            .entry(node)
+            .or_insert_with(HashSet::<(usize, usize)>::new);
         counter.insert((id, value));
         Ok(())
     }
 
     fn total(&self) -> anyhow::Result<usize> {
-        let total: usize = self
-            .node_counters
-            .values()
-            .flatten()
-            .map(|(_, v)| v)
-            .sum();
+        let total: usize = self.node_counters.values().flatten().map(|(_, v)| v).sum();
         Ok(total)
     }
 }
@@ -62,10 +60,7 @@ struct GCounterServer {
 }
 
 impl Server<Payload, Timer> for GCounterServer {
-    fn init(
-        _: &ClusterState,
-        _: &mut Timers<Payload, Timer>,
-    ) -> Result<GCounterServer> {
+    fn init(_: &ClusterState, _: &mut Timers<Payload, Timer>) -> Result<GCounterServer> {
         let server = GCounterServer {
             gcounter: GCounter::new(),
         };
@@ -89,38 +84,39 @@ impl Server<Payload, Timer> for GCounterServer {
 
                 self.gcounter.add(input.src.to_string(), id, *delta)?;
 
-                for node in cluster_state.node_ids.iter().filter(|&n| n != &cluster_state.node_id && n != &input.src) {
+                for node in cluster_state
+                    .node_ids
+                    .iter()
+                    .filter(|&n| n != &cluster_state.node_id && n != &input.src)
+                {
                     let mut values = HashSet::<(usize, usize)>::new();
                     values.insert((id, *delta));
 
-                    let replicate = Payload::Replicate {
-                        values
-                    };
+                    let replicate = Payload::Replicate { values };
 
                     io.rpc_request_with_retry(node, &replicate, Duration::from_millis(500))?;
                 }
 
-                let add_ok = Payload::AddOk{};
+                let add_ok = Payload::AddOk {};
                 io.rpc_reply_to(&input, &add_ok)?;
-            },
-            Payload::AddOk => {
-            },
+            }
+            Payload::AddOk => {}
             Payload::Read => {
                 let total = self.gcounter.total()?;
                 let read_ok = Payload::ReadOk { value: total };
 
                 io.rpc_reply_to(&input, &read_ok)?;
-            },
+            }
             Payload::ReadOk { .. } => bail!("unexpected read_ok message"),
             Payload::Replicate { values } => {
                 for v in values {
                     let (id, value) = *v;
                     self.gcounter.add(input.src.to_string(), id, value)?;
                 }
-            },
+            }
             Payload::ReplicateOk => {
                 io.rpc_mark_completed(&input);
-            },
+            }
         }
         Ok(())
     }

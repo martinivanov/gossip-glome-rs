@@ -93,9 +93,7 @@ impl Server<Payload, Timer> for BroadcastServer {
             Payload::Broadcast { message } => {
                 if !self.messages.contains(message) {
                     for n in self.neighbours.iter() {
-                        let broadcast = Payload::Broadcast {
-                            message: *message,
-                        };
+                        let broadcast = Payload::Broadcast { message: *message };
 
                         _ = io.rpc_request_with_retry(n, &broadcast, Duration::from_millis(300))?;
                     }
@@ -133,12 +131,7 @@ impl Server<Payload, Timer> for BroadcastServer {
         Ok(())
     }
 
-    fn on_timer(
-        &mut self,
-        _: &ClusterState,
-        io: &mut IO<Payload>,
-        input: Timer,
-    ) -> Result<()>
+    fn on_timer(&mut self, _: &ClusterState, io: &mut IO<Payload>, input: Timer) -> Result<()>
     where
         Self: Sized,
     {

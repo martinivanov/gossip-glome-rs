@@ -58,10 +58,11 @@ impl Server<Payload, Timer> for BroadcastServer {
             .map(|n| (n.to_string(), HashSet::new()))
             .collect();
 
-
-
-        let mut nodes: Vec<String> = (0..cluster_state.node_ids.len()).map(|n| format!("n{}", n)).collect();
-        let mut topology: HashMap<String, Vec<String>> = nodes.iter().map(|n| (n.clone(), Vec::new())).collect();
+        let mut nodes: Vec<String> = (0..cluster_state.node_ids.len())
+            .map(|n| format!("n{}", n))
+            .collect();
+        let mut topology: HashMap<String, Vec<String>> =
+            nodes.iter().map(|n| (n.clone(), Vec::new())).collect();
 
         let root = nodes.remove(0);
         for c in nodes {
@@ -70,7 +71,7 @@ impl Server<Payload, Timer> for BroadcastServer {
             let root_neigbours = topology.get_mut(&root).unwrap();
             root_neigbours.push(c.clone());
         }
-        
+
         //let root1 = nodes.remove(0);
         //let root2 = nodes.remove(0);
         //let mid = nodes.len() / 2;
@@ -107,7 +108,6 @@ impl Server<Payload, Timer> for BroadcastServer {
             neighbours,
         };
 
-
         Ok(server)
     }
 
@@ -135,21 +135,25 @@ impl Server<Payload, Timer> for BroadcastServer {
             Payload::TopologyOk => bail!("unexpected topology_ok message"),
             Payload::Broadcast { message } => {
                 if self.messages.insert(*message) {
-                    eprintln!("Sending message {} to all our neighbours: {:?}", message, self.neighbours);
+                    eprintln!(
+                        "Sending message {} to all our neighbours: {:?}",
+                        message, self.neighbours
+                    );
                     for n in &self.neighbours {
                         if n == &input.src {
                             eprintln!("Skipping {} for message {}", n, message);
                             continue;
                         }
 
-                        let broadcast = Payload::Broadcast {
-                            message: *message,
-                        };
+                        let broadcast = Payload::Broadcast { message: *message };
 
                         _ = io.rpc_request_with_retry(n, &broadcast, Duration::from_millis(400))?;
                     }
                 } else {
-                    eprintln!("Skipping message {} from {} as we already have it", message, input.src);
+                    eprintln!(
+                        "Skipping message {} from {} as we already have it",
+                        message, input.src
+                    );
                 }
 
                 let reply = Payload::BroadcastOk;
@@ -193,7 +197,10 @@ impl Server<Payload, Timer> for BroadcastServer {
     {
         match input {
             Timer::Gossip => {
-                let nodes: Vec<&String> = cluster_state.node_ids.choose_multiple(&mut rand::thread_rng(), 5).collect();
+                let nodes: Vec<&String> = cluster_state
+                    .node_ids
+                    .choose_multiple(&mut rand::thread_rng(), 5)
+                    .collect();
                 for n in &nodes {
                     //let dst_seen = &self.seen[n];
                     //let to_send: Vec<usize> = self.messages.difference(dst_seen).copied().collect();
