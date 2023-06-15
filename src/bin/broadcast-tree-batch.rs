@@ -67,39 +67,41 @@ impl Server<Payload, Timer> for BroadcastServer {
         let mut topology: HashMap<String, Vec<String>> =
             nodes.iter().map(|n| (n.clone(), Vec::new())).collect();
 
-        let root = nodes.remove(0);
-        for c in nodes {
-            let neighours = topology.get_mut(&c).unwrap();
-            neighours.push(root.clone());
-            let root_neigbours = topology.get_mut(&root).unwrap();
-            root_neigbours.push(c.clone());
+        //let root = nodes.remove(0);
+        //for c in nodes {
+        //    let neighours = topology.get_mut(&c).unwrap();
+        //    neighours.push(root.clone());
+        //    let root_neigbours = topology.get_mut(&root).unwrap();
+        //    root_neigbours.push(c.clone());
+        //}
+
+        let root1 = nodes.remove(0);
+        let root2 = nodes.remove(0);
+        let mid = nodes.len() / 2;
+
+        let (children1, children2) = nodes.split_at(mid);
+        for c in children1 {
+            let neighours = topology.get_mut(c).unwrap();
+            neighours.push(root1.clone());
+            //neighours.push(root2.clone());
+            let root1_neigbours = topology.get_mut(&root1).unwrap();
+            root1_neigbours.push(c.clone());
+            //let root2_neigbours = topology.get_mut(&root2).unwrap();
+            //root2_neigbours.push(c.clone());
         }
 
-        //let root1 = nodes.remove(0);
-        //let root2 = nodes.remove(0);
-        //let mid = nodes.len() / 2;
+        for c in children2 {
+            let neighours = topology.get_mut(c).unwrap();
+            //neighours.push(root1.clone());
+            neighours.push(root2.clone());
+            //let root1_neigbours = topology.get_mut(&root1).unwrap();
+            //root1_neigbours.push(c.clone());
+            let root2_neigbours = topology.get_mut(&root2).unwrap();
+            root2_neigbours.push(c.clone());
+        }
 
-        //let (children1, children2) = nodes.split_at(mid);
-        //for c in children1 {
-        //    let neighours = topology.get_mut(c).unwrap();
-        //    neighours.push(root1.clone());
-        //    neighours.push(root2.clone());
-        //    let root1_neigbours = topology.get_mut(&root1).unwrap();
-        //    root1_neigbours.push(c.clone());
-        //    let root2_neigbours = topology.get_mut(&root2).unwrap();
-        //    root2_neigbours.push(c.clone());
-        //}
-
-        //for c in children2 {
-        //    let neighours = topology.get_mut(c).unwrap();
-        //    neighours.push(root1.clone());
-        //    neighours.push(root2.clone());
-        //    let root1_neigbours = topology.get_mut(&root1).unwrap();
-        //    root1_neigbours.push(c.clone());
-        //    let root2_neigbours = topology.get_mut(&root2).unwrap();
-        //    root2_neigbours.push(c.clone());
-        //}
-
+        topology.get_mut(&root1).unwrap().push(root2.clone());
+        topology.get_mut(&root2).unwrap().push(root1.clone());
         //eprintln!("Topology: {:?}", topology);
 
         let neighbours = topology[&cluster_state.node_id].clone();
@@ -117,22 +119,13 @@ impl Server<Payload, Timer> for BroadcastServer {
 
     fn on_message(
         &mut self,
-        cluster_state: &ClusterState,
+        _: &ClusterState,
         io: &mut IO<Payload>,
         input: Message<Payload>,
     ) -> Result<()> {
         let payload = &input.body.payload;
         match payload {
-            Payload::Topology { topology } => {
-                //let neighbours = topology
-                //    .get(&cluster_state.node_id)
-                //    .unwrap()
-                //    .iter()
-                //    .cloned();
-
-                //self.neighbours.extend(neighbours);
-                //eprintln!("Discovered neighbours: {:?}", &self.neighbours);
-
+            Payload::Topology { topology: _ } => {
                 let reply = Payload::TopologyOk;
                 io.rpc_reply_to(&input, &reply)?;
             }
@@ -145,7 +138,8 @@ impl Server<Payload, Timer> for BroadcastServer {
                         }
                     }
                     (None, Some(b)) => {
-                        self.messages.extend(b);
+                        let diff: Vec<usize> = b.difference(&self.messages).cloned().collect();
+                        self.messages.extend(diff.clone());
                         self.outbox.extend(b);
                     }
                     (None, None) => bail!("Impossible"),

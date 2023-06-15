@@ -152,7 +152,11 @@ where
 
         let sleep = future
             .iter()
-            .map(|r| r.timeout - r.timeout.min(r.issued_at.elapsed()))
+            .map(|r| {
+                r.timeout
+                    .checked_sub(r.issued_at.elapsed())
+                    .unwrap_or_default()
+            })
             .min()
             .unwrap_or(Duration::MAX);
 
@@ -275,7 +279,7 @@ where
                         .context("failed processing message")?;
                 }
                 Event::EOF => break,
-                Event::Tick => ()
+                Event::Tick => (),
             }
 
             let since_last_tick = last_tick.elapsed();
@@ -292,7 +296,7 @@ where
                 let to_next_timer = self.timers.fire()?;
                 tick_timeout = cmp::min(tick_timeout, to_next_timer);
             } else {
-                tick_timeout = tick_timeout - cmp::min(tick_timeout, since_last_tick);
+                tick_timeout = tick_timeout.checked_sub(since_last_tick).unwrap_or_default();
             }
 
             last_tick = Instant::now();
@@ -414,7 +418,7 @@ where
                 reg.last_fire = Instant::now();
                 sleep = cmp::min(sleep, reg.interval);
             } else {
-                sleep = reg.interval - last_fire;
+                sleep = reg.interval.checked_sub(last_fire).unwrap_or_default();
             }
         }
 
