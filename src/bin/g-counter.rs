@@ -79,7 +79,6 @@ impl Server<Payload, Timer> for GCounterServer {
             Payload::Add { delta } => {
                 let Some(id) = input.body.id else {
                     bail!("got RPC add message with no message id");
-                    
                 };
 
                 self.gcounter.add(input.src.to_string(), id, *delta)?;
