@@ -167,7 +167,7 @@ impl Server<Payload, Timer> for KafkaServer {
                 let poll_ok = Payload::PollOk { msgs: messages };
                 io.rpc_reply_to(&input, &poll_ok)?;
             }
-            Payload::PollOk { msgs } => todo!(),
+            Payload::PollOk {..} => bail!("unexpected poll_ok"),
             Payload::CommitOffsets { offsets } => {
                 for (key, value) in offsets {
                     match self.offset_store.entry(key.to_string()) {
@@ -192,7 +192,7 @@ impl Server<Payload, Timer> for KafkaServer {
                         offsets: offsets.clone(),
                     };
 
-                    io.rpc_request_with_retry(&n, &commit_offsets, Duration::from_millis(250))?;
+                    io.rpc_request_with_retry(n, &commit_offsets, Duration::from_millis(250))?;
                 }
 
                 let commit_offsets_ok = Payload::CommitOffsetsOk {};
@@ -220,8 +220,8 @@ impl Server<Payload, Timer> for KafkaServer {
 
     fn on_timer(
         &mut self,
-        cluster_state: &ClusterState,
-        io: &mut IO<Payload>,
+        _cluster_state: &ClusterState,
+        _io: &mut IO<Payload>,
         timer: Timer,
     ) -> Result<()>
     where

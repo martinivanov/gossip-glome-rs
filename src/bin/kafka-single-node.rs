@@ -83,7 +83,7 @@ impl Server<Payload, ()> for KafkaServer {
                 let send_ok = Payload::SendOk { offset };
                 io.rpc_reply_to(&input, &send_ok)?;
             },
-            Payload::SendOk { offset } => todo!(),
+            Payload::SendOk { offset: _ } => todo!(),
             Payload::Poll { offsets } => {
                 let messages: HashMap<String, Vec<Record>> = offsets.iter().map(|(key, offset)| {
                     let records = match self.logs.entry(key.to_string()) {
@@ -97,7 +97,7 @@ impl Server<Payload, ()> for KafkaServer {
                 let poll_ok = Payload::PollOk { msgs: messages };
                 io.rpc_reply_to(&input, &poll_ok)?;
             },
-            Payload::PollOk { msgs } => todo!(),
+            Payload::PollOk { msgs: _ } => todo!(),
             Payload::CommitOffsets { offsets } => {
                 for (k, v) in offsets {
                     self.offset_store.insert(k.to_string(), *v);
@@ -118,7 +118,7 @@ impl Server<Payload, ()> for KafkaServer {
                 let list_committed_offsets_ok = Payload::ListCommittedOffsetsOk { offsets };
                 io.rpc_reply_to(&input, &list_committed_offsets_ok)?;
             },
-            Payload::ListCommittedOffsetsOk { offsets } => todo!(),
+            Payload::ListCommittedOffsetsOk { offsets: _ } => todo!(),
         };
 
         Ok(())
