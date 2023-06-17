@@ -1,7 +1,7 @@
 use gossip_glomers_rs::{ClusterState, Message, Node, Server, Timers, IO};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap},
     time::Duration,
 };
 
@@ -15,43 +15,40 @@ enum Payload {
     AddOk,
     Read,
     ReadOk { value: usize },
-    Replicate { values: HashSet<(usize, usize)> },
+    Replicate { delta: usize },
     ReplicateOk,
 }
 
-#[derive(Clone, Copy, Debug)]
-enum Timer {
-    Replicate,
-}
-
 fn main() -> anyhow::Result<()> {
-    let mut node = Node::<GCounterServer, Payload, Timer>::init()?;
+    let mut node = Node::<GCounterServer, Payload, ()>::init()?;
     node.run()
 }
 
 struct GCounter {
-    node_counters: HashMap<String, HashSet<(usize, usize)>>,
+    counters: HashMap<String, usize>,
 }
 
 impl GCounter {
     fn new() -> Self {
         GCounter {
-            node_counters: HashMap::<String, HashSet<(usize, usize)>>::new(),
+            counters: HashMap::<String, usize>::new(),
         }
     }
 
-    fn add(&mut self, node: String, id: usize, value: usize) -> anyhow::Result<()> {
-        let counter = self
-            .node_counters
-            .entry(node)
-            .or_insert_with(HashSet::<(usize, usize)>::new);
-        counter.insert((id, value));
-        Ok(())
+    fn increment(&mut self, node: String, value: usize) {
+        match self.counters.entry(node) {
+            std::collections::hash_map::Entry::Occupied(o) => {
+                let v = o.into_mut();
+                *v += value;
+            }
+            std::collections::hash_map::Entry::Vacant(v) => {
+                v.insert(value);
+            }
+        };
     }
 
-    fn total(&self) -> anyhow::Result<usize> {
-        let total: usize = self.node_counters.values().flatten().map(|(_, v)| v).sum();
-        Ok(total)
+    fn value(&self) -> usize {
+        self.counters.values().sum()
     }
 }
 
@@ -59,8 +56,8 @@ struct GCounterServer {
     gcounter: GCounter,
 }
 
-impl Server<Payload, Timer> for GCounterServer {
-    fn init(_: &ClusterState, _: &mut Timers<Payload, Timer>) -> Result<GCounterServer> {
+impl Server<Payload, ()> for GCounterServer {
+    fn init(_: &ClusterState, _: &mut Timers<Payload, ()>) -> Result<GCounterServer> {
         let server = GCounterServer {
             gcounter: GCounter::new(),
         };
@@ -77,21 +74,14 @@ impl Server<Payload, Timer> for GCounterServer {
         let payload = &input.body.payload;
         match payload {
             Payload::Add { delta } => {
-                let Some(id) = input.body.id else {
-                    bail!("got RPC add message with no message id");
-                };
-
-                self.gcounter.add(input.src.to_string(), id, *delta)?;
+                self.gcounter.increment(input.src.to_string(), *delta);
 
                 for node in cluster_state
                     .node_ids
                     .iter()
                     .filter(|&n| n != &cluster_state.node_id && n != &input.src)
                 {
-                    let mut values = HashSet::<(usize, usize)>::new();
-                    values.insert((id, *delta));
-
-                    let replicate = Payload::Replicate { values };
+                    let replicate = Payload::Replicate { delta: *delta };
 
                     io.rpc_request_with_retry(node, &replicate, Duration::from_millis(500))?;
                 }
@@ -99,19 +89,20 @@ impl Server<Payload, Timer> for GCounterServer {
                 let add_ok = Payload::AddOk {};
                 io.rpc_reply_to(&input, &add_ok)?;
             }
-            Payload::AddOk => {}
+            Payload::AddOk => {
+                io.rpc_mark_completed(&input);
+            }
             Payload::Read => {
-                let total = self.gcounter.total()?;
+                let total = self.gcounter.value();
                 let read_ok = Payload::ReadOk { value: total };
 
                 io.rpc_reply_to(&input, &read_ok)?;
             }
             Payload::ReadOk { .. } => bail!("unexpected read_ok message"),
-            Payload::Replicate { values } => {
-                for v in values {
-                    let (id, value) = *v;
-                    self.gcounter.add(input.src.to_string(), id, value)?;
-                }
+            Payload::Replicate { delta } => {
+                self.gcounter.increment(input.src.to_string(), *delta);
+                let replicate_ok = Payload::ReplicateOk {};
+                io.rpc_reply_to(&input, &replicate_ok)?;
             }
             Payload::ReplicateOk => {
                 io.rpc_mark_completed(&input);
@@ -120,7 +111,7 @@ impl Server<Payload, Timer> for GCounterServer {
         Ok(())
     }
 
-    fn on_timer(&mut self, _: &ClusterState, _: &mut IO<Payload>, _: Timer) -> Result<()>
+    fn on_timer(&mut self, _: &ClusterState, _: &mut IO<Payload>, _: ()) -> Result<()>
     where
         Self: Sized,
     {
