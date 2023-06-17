@@ -1,5 +1,4 @@
 use std::{
-    cmp,
     collections::{hash_map::Entry, HashMap},
     time::Duration,
 };
@@ -11,6 +10,7 @@ use anyhow::{bail, Result};
 
 type Offset = usize;
 type Record = (Offset, usize);
+type ForwardedFor = (String, usize);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
@@ -20,12 +20,12 @@ enum Payload {
         key: String,
         msg: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
-        forwarded_for: Option<(String, usize)>,
+        forwarded_for: Option<ForwardedFor>,
     },
     SendOk {
         offset: Offset,
         #[serde(skip_serializing_if = "Option::is_none")]
-        forwarded_for: Option<(String, usize)>,
+        forwarded_for: Option<ForwardedFor>,
     },
     Poll {
         offsets: HashMap<String, Offset>,
@@ -113,18 +113,14 @@ impl Server<Payload, Timer> for KafkaServer {
                 msg,
                 forwarded_for,
             } => {
-                let log = match self.logs.entry(key.to_string()) {
-                    Entry::Occupied(o) => o.into_mut(),
-                    Entry::Vacant(v) => v.insert(Log::new()),
-                };
-
                 let int_key = key.parse::<usize>()?;
                 let leader = int_key % cluster_state.node_ids.len();
                 if leader == self.my_id {
-                    eprintln!("I am leader for {}!", key);
-                    if let Some((for_src, for_id)) = forwarded_for.clone() {
-                        eprintln!("Handling message for src: {}, id: {}", for_src, for_id);
-                    }
+                    let log = match self.logs.entry(key.to_string()) {
+                        Entry::Occupied(o) => o.into_mut(),
+                        Entry::Vacant(v) => v.insert(Log::new()),
+                    };
+
                     let offset = log.append(*msg);
                     let send_ok = Payload::SendOk {
                         offset,
@@ -132,15 +128,12 @@ impl Server<Payload, Timer> for KafkaServer {
                     };
                     io.rpc_reply_to(&input, &send_ok)?;
                 } else {
-                    eprintln!(
-                        "I am NOT leader for {}, node with ID {} is! Forwarding message.",
-                        key, leader
-                    );
                     let send = Payload::Send {
                         key: key.to_string(),
                         msg: *msg,
                         forwarded_for: Some((input.src, input.body.id.unwrap())),
                     };
+
                     let dst = format!("n{}", leader);
                     io.rpc_request_with_retry(&dst, &send, Duration::from_millis(250))?;
                 }
@@ -154,8 +147,6 @@ impl Server<Payload, Timer> for KafkaServer {
                     offset: *offset,
                     forwarded_for: None,
                 };
-
-                eprintln!("Sending OK for forwarded request: {:?}, dst: {}, msg_id: {}", send_ok, dst, msg_id);
 
                 io.send(&dst, Some(msg_id), &send_ok)?;
                 io.rpc_mark_completed(&input);
@@ -221,7 +212,7 @@ impl Server<Payload, Timer> for KafkaServer {
                 let list_committed_offsets_ok = Payload::ListCommittedOffsetsOk { offsets };
                 io.rpc_reply_to(&input, &list_committed_offsets_ok)?;
             }
-            Payload::ListCommittedOffsetsOk { offsets } => todo!(),
+            Payload::ListCommittedOffsetsOk {..} => bail!("unexpected list_committed_offsets_ok message"),
         };
 
         Ok(())
