@@ -3,6 +3,8 @@ use std::{
     time::Duration,
 };
 
+use itertools::Itertools;
+
 use gossip_glomers_rs::{ClusterState, Message, Node, Server, Timers, IO};
 use serde::{Deserialize, Serialize};
 
@@ -43,11 +45,17 @@ enum Payload {
     ListCommittedOffsetsOk {
         offsets: HashMap<String, Offset>,
     },
+    ReplicaPoll {
+        offsets: HashMap<String, Offset>,
+    },
+    ReplicaPollOk {
+        msgs: HashMap<String, Vec<Record>>,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
 enum Timer {
-    Poll,
+    ReplicaPoll,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -73,9 +81,20 @@ impl Log {
         offset
     }
 
+    fn append_records(&mut self, mut records: Vec<Record>) {
+        self.records.append(&mut records);
+    }
+
     fn read_from(&self, offset: Offset) -> Vec<Record> {
         // TODO: there is probably a better way
-        self.records[offset..].iter().take(10).copied().collect()
+        self.records[offset..].iter().take(50).copied().collect()
+    }
+
+    fn current_offset(&self) -> Offset {
+        match self.records.last() {
+            Some((offset, _)) => *offset,
+            None => 0,
+        }
     }
 }
 
@@ -90,7 +109,7 @@ impl Server<Payload, Timer> for KafkaServer {
         cluster_state: &ClusterState,
         timers: &mut Timers<Payload, Timer>,
     ) -> Result<KafkaServer> {
-        timers.register_timer(Timer::Poll, Duration::from_millis(100));
+        timers.register_timer(Timer::ReplicaPoll, Duration::from_millis(250));
 
         let my_id = cluster_state.node_id[1..].parse::<usize>()?;
         Ok(KafkaServer {
@@ -167,7 +186,7 @@ impl Server<Payload, Timer> for KafkaServer {
                 let poll_ok = Payload::PollOk { msgs: messages };
                 io.rpc_reply_to(&input, &poll_ok)?;
             }
-            Payload::PollOk {..} => bail!("unexpected poll_ok"),
+            Payload::PollOk { .. } => bail!("unexpected poll_ok"),
             Payload::CommitOffsets { offsets } => {
                 for (key, value) in offsets {
                     match self.offset_store.entry(key.to_string()) {
@@ -212,7 +231,39 @@ impl Server<Payload, Timer> for KafkaServer {
                 let list_committed_offsets_ok = Payload::ListCommittedOffsetsOk { offsets };
                 io.rpc_reply_to(&input, &list_committed_offsets_ok)?;
             }
-            Payload::ListCommittedOffsetsOk {..} => bail!("unexpected list_committed_offsets_ok message"),
+            Payload::ListCommittedOffsetsOk { .. } => {
+                bail!("unexpected list_committed_offsets_ok message")
+            }
+            Payload::ReplicaPoll { offsets } => {
+                let messages: HashMap<String, Vec<Record>> = self
+                    .logs
+                    .iter()
+                    .filter(|(k, _)| {
+                        let Ok(int_key) = k.parse::<usize>() else {
+                            return false;
+                        };
+
+                        let leader = int_key % cluster_state.node_ids.len();
+                        leader == self.my_id
+                    })
+                    .map(|(k, v)| {
+                        let offset = offsets.get(k).unwrap_or(&0);
+                        let records = v.read_from(*offset);
+                        (k.clone(), records)
+                    })
+                    .collect();
+
+                let replica_poll_ok = Payload::ReplicaPollOk { msgs: messages };
+                io.rpc_reply_to(&input, &replica_poll_ok)?;
+            }
+            Payload::ReplicaPollOk { msgs } => {
+                for (l, recs) in msgs {
+                    let log = self.logs.entry(l.clone()).or_insert_with(Log::new);
+                    log.append_records(recs.to_vec())
+                }
+
+                io.rpc_mark_completed(&input);
+            }
         };
 
         Ok(())
@@ -220,15 +271,58 @@ impl Server<Payload, Timer> for KafkaServer {
 
     fn on_timer(
         &mut self,
-        _cluster_state: &ClusterState,
-        _io: &mut IO<Payload>,
+        cluster_state: &ClusterState,
+        io: &mut IO<Payload>,
         timer: Timer,
     ) -> Result<()>
     where
         Self: Sized,
     {
         match timer {
-            Timer::Poll => {}
+            Timer::ReplicaPoll => {
+                let offset_groups = self
+                    .logs
+                    .iter()
+                    .filter_map(|(k, v)| {
+                        let Ok(int_key) = k.parse::<usize>() else {
+                            return None;
+                        };
+
+                        let leader = int_key % cluster_state.node_ids.len();
+                        Some((leader, k, v))
+                    })
+                    .filter(|(leader, _, _)| leader != &self.my_id)
+                    .group_by(|(leader, _, _)| *leader);
+
+                let requests: HashMap<String, Payload> = offset_groups
+                    .into_iter()
+                    .map(|(leader, group)| {
+                        let offsets: HashMap<String, Offset> = group
+                            .map(|(_, k, l)| {
+                                let offset = l.current_offset();
+                                (k.to_string(), offset + 1)
+                            })
+                            .collect();
+
+                        let node = format!("n{}", leader);
+                        let request = Payload::ReplicaPoll { offsets };
+                        (node, request)
+                    })
+                    .collect();
+
+                let empty = Payload::ReplicaPoll {
+                    offsets: HashMap::<String, Offset>::new(),
+                };
+
+                for node in cluster_state
+                    .node_ids
+                    .iter()
+                    .filter(|&n| n != &cluster_state.node_id)
+                {
+                    let request = requests.get(node).unwrap_or(&empty);
+                    io.rpc_request(&node, &request, Duration::from_secs(5), false)?;
+                }
+            }
         }
 
         Ok(())
