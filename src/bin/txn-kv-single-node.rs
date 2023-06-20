@@ -61,9 +61,11 @@ struct TxnKVServer {
 
 impl Server<Payload, ()> for TxnKVServer {
     fn init(_: &ClusterState, _: &mut Timers<Payload, ()>) -> Result<TxnKVServer> {
-        Ok(TxnKVServer {
+        let server = TxnKVServer {
             store: HashMap::<usize, usize>::new(),
-        })
+        };
+
+        Ok(server)
     }
 
     fn on_message(
