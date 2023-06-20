@@ -320,7 +320,7 @@ impl Server<Payload, Timer> for KafkaServer {
                     .filter(|&n| n != &cluster_state.node_id)
                 {
                     let request = requests.get(node).unwrap_or(&empty);
-                    io.rpc_request(&node, &request, Duration::from_secs(5), false)?;
+                    io.rpc_request(node, request, Duration::from_secs(5), false)?;
                 }
             }
         }

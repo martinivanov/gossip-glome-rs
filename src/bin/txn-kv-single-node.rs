@@ -80,7 +80,7 @@ impl Server<Payload, ()> for TxnKVServer {
                 let result: Vec<Op> = txn
                     .iter()
                     .map(|t| match t {
-                        Op::Read { key, value: _ } => match self.store.get(&key) {
+                        Op::Read { key, value: _ } => match self.store.get(key) {
                             Some(v) => Op::Read {
                                 key: *key,
                                 value: Some(*v),
