@@ -128,6 +128,14 @@ where
         self.send(dst, in_reply_to, reply)
     }
 
+    pub fn rpc_still_pending(&mut self, message: &Message<P>) -> bool {
+        if let Some(in_reply_to) = message.body.in_reply_to {
+            return self.pending_requests.contains_key(&in_reply_to);
+        };
+
+        false
+    }
+
     pub fn rpc_mark_completed(&mut self, message: &Message<P>) {
         if let Some(in_reply_to) = message.body.in_reply_to {
             _ = self.pending_requests.remove(&in_reply_to);

@@ -160,7 +160,7 @@ impl Server<Payload, Timer> for KafkaServer {
             Payload::SendOk {
                 offset,
                 forwarded_for,
-            } => {
+            } if io.rpc_still_pending(&input) => {
                 let (dst, msg_id) = forwarded_for.clone().unwrap();
                 let send_ok = Payload::SendOk {
                     offset: *offset,
@@ -186,7 +186,6 @@ impl Server<Payload, Timer> for KafkaServer {
                 let poll_ok = Payload::PollOk { msgs: messages };
                 io.rpc_reply_to(&input, &poll_ok)?;
             }
-            Payload::PollOk { .. } => bail!("unexpected poll_ok"),
             Payload::CommitOffsets { offsets } => {
                 for (key, value) in offsets {
                     match self.offset_store.entry(key.to_string()) {
@@ -217,7 +216,7 @@ impl Server<Payload, Timer> for KafkaServer {
                 let commit_offsets_ok = Payload::CommitOffsetsOk {};
                 io.rpc_reply_to(&input, &commit_offsets_ok)?;
             }
-            Payload::CommitOffsetsOk => {
+            Payload::CommitOffsetsOk if io.rpc_still_pending(&input) => {
                 io.rpc_mark_completed(&input);
             }
             Payload::ListCommittedOffsets { keys } => {
@@ -230,9 +229,6 @@ impl Server<Payload, Timer> for KafkaServer {
 
                 let list_committed_offsets_ok = Payload::ListCommittedOffsetsOk { offsets };
                 io.rpc_reply_to(&input, &list_committed_offsets_ok)?;
-            }
-            Payload::ListCommittedOffsetsOk { .. } => {
-                bail!("unexpected list_committed_offsets_ok message")
             }
             Payload::ReplicaPoll { offsets } => {
                 let messages: HashMap<String, Vec<Record>> = self
@@ -256,7 +252,7 @@ impl Server<Payload, Timer> for KafkaServer {
                 let replica_poll_ok = Payload::ReplicaPollOk { msgs: messages };
                 io.rpc_reply_to(&input, &replica_poll_ok)?;
             }
-            Payload::ReplicaPollOk { msgs } => {
+            Payload::ReplicaPollOk { msgs } if io.rpc_still_pending(&input) => {
                 for (l, recs) in msgs {
                     let log = self.logs.entry(l.clone()).or_insert_with(Log::new);
                     log.append_records(recs.to_vec())
@@ -264,6 +260,10 @@ impl Server<Payload, Timer> for KafkaServer {
 
                 io.rpc_mark_completed(&input);
             }
+            _ if input.body.in_reply_to.is_some() && !io.rpc_still_pending(&input) => {
+                eprintln!("received late response");
+            }
+            _ => bail!("unexpected payload {:?}", payload),
         };
 
         Ok(())
